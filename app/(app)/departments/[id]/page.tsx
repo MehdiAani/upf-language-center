@@ -60,17 +60,22 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
     .maybeSingle()
 
   if (!dept) {
+    const deptErrMsg =
+      deptError && typeof deptError === 'object' && 'message' in deptError
+        ? String((deptError as { message: string }).message)
+        : 'none'
+    const profErrMsg =
+      profileError && typeof profileError === 'object' && 'message' in profileError
+        ? String((profileError as { message: string }).message)
+        : 'none'
+
     return (
       <div className="mx-auto max-w-2xl rounded-xl border border-amber-300 bg-amber-50 p-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
         <p className="font-bold">Department lookup returned empty on live server</p>
         <p className="mt-2 font-mono text-xs">Requested ID: {id}</p>
         <p className="mt-1 font-mono text-xs">Role: {profile.role}</p>
-        <p className="mt-1 font-mono text-xs">
-          Profile Error: {profileError?.message ?? 'none'}
-        </p>
-        <p className="mt-1 font-mono text-xs">
-          Department Error: {deptError?.message ?? 'none'}
-        </p>
+        <p className="mt-1 font-mono text-xs">Profile Error: {profErrMsg}</p>
+        <p className="mt-1 font-mono text-xs">Department Error: {deptErrMsg}</p>
       </div>
     )
   }
