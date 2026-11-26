@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { cookies } from 'next/headers'
-import { notFound, redirect } from 'next/navigation'
+import { redirect } from 'next/navigation'
 import { getLocale } from 'next-intl/server'
 import { createClient } from '@/lib/supabase/server'
 import DepartmentView, {
@@ -27,7 +27,7 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
     redirect('/login')
   }
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileError } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
@@ -59,17 +59,20 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
     .eq('id', id)
     .maybeSingle()
 
-  if (deptError) {
+  if (!dept) {
     return (
-      <div className="mx-auto max-w-2xl rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-300">
-        <p className="font-bold">Database error loading department:</p>
-        <p className="mt-1 font-mono text-xs">{deptError.message}</p>
+      <div className="mx-auto max-w-2xl rounded-xl border border-amber-300 bg-amber-50 p-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
+        <p className="font-bold">Department lookup returned empty on live server</p>
+        <p className="mt-2 font-mono text-xs">Requested ID: {id}</p>
+        <p className="mt-1 font-mono text-xs">Role: {profile.role}</p>
+        <p className="mt-1 font-mono text-xs">
+          Profile Error: {profileError?.message ?? 'none'}
+        </p>
+        <p className="mt-1 font-mono text-xs">
+          Department Error: {deptError?.message ?? 'none'}
+        </p>
       </div>
     )
-  }
-
-  if (!dept) {
-    notFound()
   }
 
   const { data: semesters } = await supabase
