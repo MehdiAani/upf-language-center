@@ -1,0 +1,66 @@
+{
+  "nav": {
+    "dashboard": "Dashboard",
+    "departments": "Departments",
+    "admin": "Admin",
+    "users": "Users",
+    "signOut": "Sign out"
+  },
+  "header": {
+    "semester": "Semester",
+    "language": "Language",
+    "english": "English",
+    "french": "French",
+    "role": "Role"
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signUp": "Sign up",
+    "email": "Email",
+    "password": "Password",
+    "fullName": "Full name",
+    "signInButton": "Sign in",
+    "signUpButton": "Create account",
+    "switchToSignUp": "Don't have an account? Sign up",
+    "switchToSignIn": "Already have an account? Sign in",
+    "welcome": "Welcome back",
+    "createAccount": "Create your account"
+  },
+  "dashboard": {
+    "title": "Dashboard",
+    "departments": "Departments",
+    "semiModules": "Semi-Modules",
+    "noDepartments": "No departments found",
+    "noSemiModules": "No semi-modules assigned yet",
+    "professorCount": "Professors",
+    "studentCount": "Students",
+    "englishModules": "English",
+    "frenchModules": "French",
+    "viewDepartment": "View department",
+    "takeAttendance": "Take attendance"
+  },
+  "admin": {
+    "departments": "Departments",
+    "users": "Users",
+    "addDepartment": "Add Department",
+    "editDepartment": "Edit Department",
+    "archive": "Archive",
+    "restore": "Restore",
+    "role": "Role",
+    "isActive": "Active",
+    "departmentCode": "Department code",
+    "nameEn": "Name (English)",
+    "nameFr": "Name (French)",
+    "color": "Accent color",
+    "save": "Save",
+    "cancel": "Cancel",
+    "delete": "Delete",
+    "confirmDelete": "Are you sure?"
+  },
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "back": "Back"
+  }
+}

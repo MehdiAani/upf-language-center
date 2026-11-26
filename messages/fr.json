@@ -1,0 +1,66 @@
+{
+  "nav": {
+    "dashboard": "Tableau de bord",
+    "departments": "Départements",
+    "admin": "Administration",
+    "users": "Utilisateurs",
+    "signOut": "Déconnexion"
+  },
+  "header": {
+    "semester": "Semestre",
+    "language": "Langue",
+    "english": "Anglais",
+    "french": "Français",
+    "role": "Rôle"
+  },
+  "auth": {
+    "signIn": "Connexion",
+    "signUp": "Créer un compte",
+    "email": "E-mail",
+    "password": "Mot de passe",
+    "fullName": "Nom complet",
+    "signInButton": "Se connecter",
+    "signUpButton": "Créer un compte",
+    "switchToSignUp": "Vous n'avez pas de compte ? S'inscrire",
+    "switchToSignIn": "Vous avez déjà un compte ? Se connecter",
+    "welcome": "Bon retour",
+    "createAccount": "Créez votre compte"
+  },
+  "dashboard": {
+    "title": "Tableau de bord",
+    "departments": "Départements",
+    "semiModules": "Sous-modules",
+    "noDepartments": "Aucun département trouvé",
+    "noSemiModules": "Aucun sous-module assigné pour le moment",
+    "professorCount": "Professeurs",
+    "studentCount": "Étudiants",
+    "englishModules": "Anglais",
+    "frenchModules": "Français",
+    "viewDepartment": "Voir le département",
+    "takeAttendance": "Prendre l'assiduité"
+  },
+  "admin": {
+    "departments": "Départements",
+    "users": "Utilisateurs",
+    "addDepartment": "Ajouter un département",
+    "editDepartment": "Modifier le département",
+    "archive": "Archiver",
+    "restore": "Restaurer",
+    "role": "Rôle",
+    "isActive": "Actif",
+    "departmentCode": "Code du département",
+    "nameEn": "Nom (Anglais)",
+    "nameFr": "Nom (Français)",
+    "color": "Couleur d'accent",
+    "save": "Enregistrer",
+    "cancel": "Annuler",
+    "delete": "Supprimer",
+    "confirmDelete": "Êtes-vous sûr ?"
+  },
+  "common": {
+    "loading": "Chargement...",
+    "error": "Erreur",
+    "success": "Succès",
+    "back": "Retour"
+  }
+}
