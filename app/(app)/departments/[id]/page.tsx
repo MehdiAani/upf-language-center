@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { cookies } from 'next/headers'
 import { notFound, redirect } from 'next/navigation'
 import { getLocale } from 'next-intl/server'
@@ -21,6 +23,10 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
   const { data: userData } = await supabase.auth.getUser()
   const userId = userData?.user?.id
 
+  if (!userId) {
+    redirect('/login')
+  }
+
   const { data: profile } = await supabase
     .from('profiles')
     .select('role')
@@ -31,7 +37,7 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
     redirect('/dashboard')
   }
 
-  if (profile.role === 'dept_head' && userId) {
+  if (profile.role === 'dept_head') {
     const { data: assignment } = await supabase
       .from('department_heads')
       .select('department_id')
@@ -47,11 +53,20 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
   const canManage =
     profile.role === 'admin' || profile.role === 'dept_head'
 
-  const { data: dept } = await supabase
+  const { data: dept, error: deptError } = await supabase
     .from('departments')
     .select('id, code, name_en, name_fr, color_accent')
     .eq('id', id)
     .maybeSingle()
+
+  if (deptError) {
+    return (
+      <div className="mx-auto max-w-2xl rounded-xl border border-red-200 bg-red-50 p-6 text-sm text-red-800 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-300">
+        <p className="font-bold">Database error loading department:</p>
+        <p className="mt-1 font-mono text-xs">{deptError.message}</p>
+      </div>
+    )
+  }
 
   if (!dept) {
     notFound()
@@ -79,7 +94,7 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
 
   const professors: ProfessorOption[] = (professorsData ?? []) as ProfessorOption[]
 
-  let classes: ClassItem[] = []
+  const classes: ClassItem[] = []
   if (activeSemester) {
     const { data: modulesData } = await supabase
       .from('modules')
