@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { notFound } from 'next/navigation'
 import { getLocale } from 'next-intl/server'
 import { createClient } from '@/lib/supabase/server'
@@ -30,12 +32,22 @@ export default async function SemiModulePage({ params }: PageProps) {
       group_name,
       title_en,
       title_fr,
+      professor_id,
       room_number,
       schedule_note,
       max_absences_allowed,
+      weight_cc1,
+      weight_cc2,
+      weight_ex,
       module:modules (
         year_level,
         code,
+        semester:semesters (
+          academic_year,
+          term_number,
+          label_en,
+          label_fr
+        ),
         department:departments (
           id,
           code,
@@ -57,6 +69,21 @@ export default async function SemiModulePage({ params }: PageProps) {
       ? mod.department[0]
       : mod.department
     : null
+  const sem = mod
+    ? Array.isArray(mod.semester)
+      ? mod.semester[0]
+      : mod.semester
+    : null
+
+  let professorName = ''
+  if (smData.professor_id) {
+    const { data: prof } = await supabase
+      .from('profiles')
+      .select('full_name, email')
+      .eq('id', smData.professor_id)
+      .maybeSingle()
+    professorName = prof?.full_name || prof?.email || ''
+  }
 
   const formatSuffix =
     smData.course_format === 'full_module'
@@ -65,11 +92,11 @@ export default async function SemiModulePage({ params }: PageProps) {
         : 'Full Module (16w)'
       : smData.term_block === 'block_2_8w'
         ? locale === 'fr'
-          ? 'Semi-Module (Sem. 9–16)'
-          : 'Semi-Module (Weeks 9–16)'
+          ? 'Semi-Module (Sem. 9 to 16)'
+          : 'Semi-Module (Weeks 9 to 16)'
         : locale === 'fr'
-          ? 'Semi-Module (Sem. 1–8)'
-          : 'Semi-Module (Weeks 1–8)'
+          ? 'Semi-Module (Sem. 1 to 8)'
+          : 'Semi-Module (Weeks 1 to 8)'
 
   const classMeta: ClassMeta = {
     id: smData.id,
@@ -78,7 +105,7 @@ export default async function SemiModulePage({ params }: PageProps) {
     title_en: smData.title_en,
     title_fr: smData.title_fr,
     room_number: smData.room_number
-      ? `${smData.room_number} • ${formatSuffix}`
+      ? `${smData.room_number} | ${formatSuffix}`
       : formatSuffix,
     schedule_note: smData.schedule_note,
     max_absences_allowed: smData.max_absences_allowed ?? 3,
@@ -87,6 +114,17 @@ export default async function SemiModulePage({ params }: PageProps) {
     department_code: dept?.code ?? '',
     department_name_en: dept?.name_en ?? '',
     department_name_fr: dept?.name_fr ?? '',
+    academic_year: sem?.academic_year ?? '2026-2027',
+    semester_number: sem?.term_number ?? 1,
+    semester_label: sem
+      ? locale === 'fr'
+        ? sem.label_fr
+        : sem.label_en
+      : '',
+    professor_name: professorName,
+    weight_cc1: Number(smData.weight_cc1 ?? 25),
+    weight_cc2: Number(smData.weight_cc2 ?? 25),
+    weight_ex: Number(smData.weight_ex ?? 50),
   }
 
   const { data: enrollments } = await supabase
@@ -95,6 +133,7 @@ export default async function SemiModulePage({ params }: PageProps) {
       student:students (
         id,
         student_code,
+        cne,
         first_name,
         last_name,
         email,
@@ -122,7 +161,7 @@ export default async function SemiModulePage({ params }: PageProps) {
 
   const { data: gradesData } = await supabase
     .from('student_grades')
-    .select('id, student_id, midterm, post_midterm, final_exam, notes')
+    .select('id, student_id, cc1, cc2, ex, midterm, post_midterm, final_exam, notes')
     .eq('semi_module_id', id)
 
   return (

@@ -18,6 +18,11 @@ import {
   X,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import {
+  computeWeightedAverage,
+  exportPvSpreadsheet,
+  parsePvSpreadsheet,
+} from '@/lib/pv-excel'
 
 export interface ClassMeta {
   id: string
@@ -33,11 +38,19 @@ export interface ClassMeta {
   department_code: string
   department_name_en: string
   department_name_fr: string
+  academic_year?: string
+  semester_number?: number
+  semester_label?: string
+  professor_name?: string
+  weight_cc1?: number
+  weight_cc2?: number
+  weight_ex?: number
 }
 
 export interface StudentItem {
   id: string
   student_code: string
+  cne?: string | null
   first_name: string
   last_name: string
   email: string | null
@@ -57,6 +70,9 @@ export interface AbsenceRecord {
 export interface GradeRecord {
   id?: string
   student_id: string
+  cc1?: number | null
+  cc2?: number | null
+  ex?: number | null
   midterm: number | null
   post_midterm: number | null
   final_exam: number | null
@@ -64,9 +80,9 @@ export interface GradeRecord {
 }
 
 interface GradeDraft {
-  midterm: string
-  post_midterm: string
-  final_exam: string
+  cc1: string
+  cc2: string
+  ex: string
   notes: string
 }
 
@@ -82,24 +98,26 @@ interface ClassWorkspaceClientProps {
 const COPY = {
   en: {
     backToDept: 'Back to Department',
-    studentsCount: (n: number) => `${n} ${n === 1 ? 'Student' : 'Students'}`,
     addStudent: 'Add Student',
     editStudent: 'Edit Student',
     importCsv: 'Import .CSV',
+    importPv: 'Import PV (.xls/.xlsx)',
+    exportPv: 'Export Official PV',
     downloadTemplate: 'CSV Template',
     csvHint:
-      'Expected CSV headers: student_code, first_name, last_name, email (optional). You can also use placeholder names like Student 01 until department assistants send the full list.',
+      'CSV columns: student_code, cne, first_name, last_name, email (optional). You can also import a PV (.xls / .xlsx) to pull CC1, CC2, and EX grades.',
     tabRoster: 'Student Roster',
     tabAbsences: 'Absence Tracker',
-    tabGrades: 'Gradebook (3 Evaluations)',
-    codeCol: 'Student ID',
+    tabGrades: 'Gradebook (CC1 / CC2 / EX)',
+    codeCol: 'Matricule',
+    cneCol: 'CNE',
     nameCol: 'Student Name',
     emailCol: 'Email',
     absencesCol: 'Absences',
     actionsCol: 'Actions',
-    noStudents:
-      'No students enrolled yet. Add a student manually or import a .CSV file.',
-    studentCodeLabel: 'Student Number / Code',
+    noStudents: 'No students enrolled yet.',
+    studentCodeLabel: 'Matricule / Student Code',
+    cneLabel: 'CNE (Optional)',
     firstNameLabel: 'First Name',
     lastNameLabel: 'Last Name',
     emailLabel: 'Email (Optional)',
@@ -114,13 +132,13 @@ const COPY = {
     statusAbsent: 'Absent',
     statusLate: 'Late',
     statusExcused: 'Excused',
-    noAbsences: 'No absences recorded for this class yet.',
+    noAbsences: 'No absences recorded yet.',
     gradebookHint:
-      'Enter scores out of 20 for Midterm, Post-Midterm Evaluation, and Final Exam. Average updates automatically.',
-    midtermCol: 'Midterm (/20)',
-    postMidtermCol: 'Post-Midterm (/20)',
-    finalCol: 'Final Exam (/20)',
-    averageCol: 'Average (/20)',
+      'Enter scores out of 20 for CC1, CC2, and EX. Weighted average (/20) and percentage update live.',
+    cc1Col: 'CC1 (/20)',
+    cc2Col: 'CC2 (/20)',
+    exCol: 'EX (/20)',
+    averageCol: 'Average & %',
     remarksCol: 'Remarks',
     saveAllGrades: 'Save All Grades',
     savingGrades: 'Saving Grades...',
@@ -131,24 +149,26 @@ const COPY = {
   },
   fr: {
     backToDept: 'Retour au departement',
-    studentsCount: (n: number) => `${n} ${n === 1 ? 'Etudiant' : 'Etudiants'}`,
     addStudent: 'Ajouter un etudiant',
     editStudent: "Modifier l'etudiant",
     importCsv: 'Importer .CSV',
+    importPv: 'Importer PV (.xls/.xlsx)',
+    exportPv: 'Exporter PV Officiel',
     downloadTemplate: 'Modele CSV',
     csvHint:
-      'Colonnes attendues : student_code, first_name, last_name, email (optionnel). Vous pouvez utiliser des noms provisoires en attendant les listes des assistants.',
+      'Colonnes CSV : student_code, cne, first_name, last_name, email (optionnel). Vous pouvez aussi importer un PV (.xls / .xlsx) pour charger CC1, CC2 et EX.',
     tabRoster: 'Liste des etudiants',
     tabAbsences: 'Suivi des absences',
-    tabGrades: 'Notes (3 Evaluations)',
-    codeCol: 'Matricule / Code',
+    tabGrades: 'Notes (CC1 / CC2 / EX)',
+    codeCol: 'Matricule',
+    cneCol: 'CNE',
     nameCol: 'Nom complet',
     emailCol: 'E-mail',
     absencesCol: 'Absences',
     actionsCol: 'Actions',
-    noStudents:
-      'Aucun etudiant inscrit. Ajoutez-en un manuellement ou importez un fichier .CSV.',
-    studentCodeLabel: 'Numero / Code etudiant',
+    noStudents: 'Aucun etudiant inscrit pour le moment.',
+    studentCodeLabel: 'Matricule / Code etudiant',
+    cneLabel: 'CNE (Optionnel)',
     firstNameLabel: 'Prenom',
     lastNameLabel: 'Nom',
     emailLabel: 'E-mail (Optionnel)',
@@ -163,13 +183,13 @@ const COPY = {
     statusAbsent: 'Absent',
     statusLate: 'En retard',
     statusExcused: 'Justifie',
-    noAbsences: 'Aucune absence enregistree pour cette classe.',
+    noAbsences: 'Aucune absence enregistree.',
     gradebookHint:
-      'Saisissez les notes sur 20 pour le controle continu (Midterm), la 2eme evaluation et l’examen final. La moyenne est calculee automatiquement.',
-    midtermCol: 'Midterm (/20)',
-    postMidtermCol: 'Post-Midterm (/20)',
-    finalCol: 'Examen Final (/20)',
-    averageCol: 'Moyenne (/20)',
+      'Saisissez les notes sur 20 pour CC1, CC2 et EX. La moyenne (/20) et le pourcentage se calculent en direct.',
+    cc1Col: 'CC1 (/20)',
+    cc2Col: 'CC2 (/20)',
+    exCol: 'EX (/20)',
+    averageCol: 'Moyenne & %',
     remarksCol: 'Observations',
     saveAllGrades: 'Enregistrer toutes les notes',
     savingGrades: 'Enregistrement...',
@@ -184,7 +204,6 @@ function parseCsvLine(line: string): string[] {
   const result: string[] = []
   let current = ''
   let inQuotes = false
-
   for (let i = 0; i < line.length; i++) {
     const ch = line[i]
     if (ch === '"') {
@@ -208,14 +227,13 @@ function parseScore(raw: string): number | null {
   return Math.max(0, Math.min(20, Math.round(num * 100) / 100))
 }
 
-function computeAverage(draft?: GradeDraft): number | null {
-  if (!draft) return null
-  const values = [draft.midterm, draft.post_midterm, draft.final_exam]
-    .map(parseScore)
-    .filter((v): v is number => v !== null)
-  if (values.length === 0) return null
-  const sum = values.reduce((acc, v) => acc + v, 0)
-  return Math.round((sum / values.length) * 100) / 100
+function normalizeNameKey(lastName: string, firstName: string): string {
+  return (lastName + ' ' + firstName)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
 }
 
 export default function ClassWorkspaceClient({
@@ -229,59 +247,46 @@ export default function ClassWorkspaceClient({
   const router = useRouter()
   const t = COPY[locale]
 
-  const [activeTab, setActiveTab] = useState<'roster' | 'absences' | 'grades'>(
-    'roster'
-  )
+  const weights = {
+    cc1: classMeta.weight_cc1 ?? 25,
+    cc2: classMeta.weight_cc2 ?? 25,
+    ex: classMeta.weight_ex ?? 50,
+  }
+
+  const [activeTab, setActiveTab] = useState<'roster' | 'absences' | 'grades'>('roster')
   const [students, setStudents] = useState<StudentItem[]>(initialStudents)
   const [absences, setAbsences] = useState<AbsenceRecord[]>(initialAbsences)
 
-  // Gradebook drafts keyed by student_id
-  const [gradeDrafts, setGradeDrafts] = useState<Record<string, GradeDraft>>(
-    () => {
-      const map: Record<string, GradeDraft> = {}
-      for (const st of initialStudents) {
-        const existing = initialGrades.find((g) => g.student_id === st.id)
-        map[st.id] = {
-          midterm:
-            existing?.midterm !== null && existing?.midterm !== undefined
-              ? String(existing.midterm)
-              : '',
-          post_midterm:
-            existing?.post_midterm !== null &&
-            existing?.post_midterm !== undefined
-              ? String(existing.post_midterm)
-              : '',
-          final_exam:
-            existing?.final_exam !== null && existing?.final_exam !== undefined
-              ? String(existing.final_exam)
-              : '',
-          notes: existing?.notes ?? '',
-        }
+  const [gradeDrafts, setGradeDrafts] = useState<Record<string, GradeDraft>>(() => {
+    const map: Record<string, GradeDraft> = {}
+    for (const st of initialStudents) {
+      const existing = initialGrades.find((g) => g.student_id === st.id)
+      const vCc1 = existing?.cc1 ?? existing?.midterm ?? null
+      const vCc2 = existing?.cc2 ?? existing?.post_midterm ?? null
+      const vEx = existing?.ex ?? existing?.final_exam ?? null
+      map[st.id] = {
+        cc1: vCc1 !== null && vCc1 !== undefined ? String(vCc1) : '',
+        cc2: vCc2 !== null && vCc2 !== undefined ? String(vCc2) : '',
+        ex: vEx !== null && vEx !== undefined ? String(vEx) : '',
+        notes: existing?.notes ?? '',
       }
-      return map
     }
-  )
+    return map
+  })
   const [savingGrades, setSavingGrades] = useState(false)
 
-  // Manual add/edit student modal state
   const [modalOpen, setModalOpen] = useState(false)
   const [editingStudent, setEditingStudent] = useState<StudentItem | null>(null)
   const [studentCode, setStudentCode] = useState('')
+  const [cne, setCne] = useState('')
   const [firstName, setFirstName] = useState('')
   const [lastName, setLastName] = useState('')
   const [email, setEmail] = useState('')
   const [savingStudent, setSavingStudent] = useState(false)
 
-  // Absence recording state
-  const [selectedStudentId, setSelectedStudentId] = useState<string>(
-    initialStudents[0]?.id ?? ''
-  )
-  const [sessionDate, setSessionDate] = useState<string>(
-    new Date().toISOString().slice(0, 10)
-  )
-  const [absenceStatus, setAbsenceStatus] = useState<
-    'absent' | 'late' | 'excused'
-  >('absent')
+  const [selectedStudentId, setSelectedStudentId] = useState<string>(initialStudents[0]?.id ?? '')
+  const [sessionDate, setSessionDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [absenceStatus, setAbsenceStatus] = useState<'absent' | 'late' | 'excused'>('absent')
   const [absenceReason, setAbsenceReason] = useState('')
   const [savingAbsence, setSavingAbsence] = useState(false)
 
@@ -289,43 +294,32 @@ export default function ClassWorkspaceClient({
   const [error, setError] = useState<string | null>(null)
 
   const classTitle = locale === 'fr' ? classMeta.title_fr : classMeta.title_en
-  const deptName =
-    locale === 'fr' ? classMeta.department_name_fr : classMeta.department_name_en
+  const deptName = locale === 'fr' ? classMeta.department_name_fr : classMeta.department_name_en
 
   function getAbsenceCount(studentId: string) {
-    return absences.filter(
-      (a) => a.student_id === studentId && a.status === 'absent'
-    ).length
+    return absences.filter((a) => a.student_id === studentId && a.status === 'absent').length
   }
 
   function ensureDraft(studentId: string): GradeDraft {
-    return (
-      gradeDrafts[studentId] ?? {
-        midterm: '',
-        post_midterm: '',
-        final_exam: '',
-        notes: '',
-      }
-    )
+    return gradeDrafts[studentId] ?? { cc1: '', cc2: '', ex: '', notes: '' }
   }
 
-  function updateGradeField(
-    studentId: string,
-    field: keyof GradeDraft,
-    value: string
-  ) {
+  function getSummaryForStudent(studentId: string) {
+    const d = ensureDraft(studentId)
+    return computeWeightedAverage(parseScore(d.cc1), parseScore(d.cc2), parseScore(d.ex), weights)
+  }
+
+  function updateGradeField(studentId: string, field: keyof GradeDraft, value: string) {
     setGradeDrafts((prev) => ({
       ...prev,
-      [studentId]: {
-        ...ensureDraft(studentId),
-        [field]: value,
-      },
+      [studentId]: { ...ensureDraft(studentId), [field]: value },
     }))
   }
 
   function openAddModal() {
     setEditingStudent(null)
     setStudentCode('')
+    setCne('')
     setFirstName('')
     setLastName('')
     setEmail('')
@@ -336,6 +330,7 @@ export default function ClassWorkspaceClient({
   function openEditModal(st: StudentItem) {
     setEditingStudent(st)
     setStudentCode(st.student_code)
+    setCne(st.cne ?? '')
     setFirstName(st.first_name)
     setLastName(st.last_name)
     setEmail(st.email ?? '')
@@ -345,43 +340,160 @@ export default function ClassWorkspaceClient({
 
   function handleDownloadTemplate() {
     const csvContent =
-      'student_code,first_name,last_name,email\nUPF-2026-001,Placeholder,Student 01,\nUPF-2026-002,Placeholder,Student 02,\n'
+      'student_code,cne,first_name,last_name,email\n1.DAI.101.26,N130000001,Yasmine,Benhari,\n'
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${classMeta.department_code || 'UPF'}-Y${classMeta.year_level}-${classMeta.group_name}-template.csv`
+    link.download = (classMeta.department_code || 'UPF') + '-Y' + classMeta.year_level + '-' + classMeta.group_name + '-template.csv'
     link.click()
     URL.revokeObjectURL(url)
   }
 
   function handleExportGradesCsv() {
-    const header =
-      'student_code,first_name,last_name,midterm,post_midterm,final_exam,average,notes'
+    const header = 'matricule,cne,nom,prenom,cc1,cc2,ex,average_20,percentage,notes'
     const rows = students.map((st) => {
       const d = ensureDraft(st.id)
-      const avg = computeAverage(d)
-      const safeNotes = `"${(d.notes ?? '').replace(/"/g, '""')}"`
+      const summary = getSummaryForStudent(st.id)
+      const safeNotes = '"' + (d.notes ?? '').replace(/"/g, '""') + '"'
       return [
         st.student_code,
-        st.first_name,
+        st.cne ?? '',
         st.last_name,
-        d.midterm,
-        d.post_midterm,
-        d.final_exam,
-        avg !== null ? avg.toFixed(2) : '',
+        st.first_name,
+        d.cc1,
+        d.cc2,
+        d.ex,
+        summary.average20 !== null ? summary.average20.toFixed(2) : '',
+        summary.percentage !== null ? summary.percentage.toFixed(1) + '%' : '',
         safeNotes,
       ].join(',')
     })
-    const blob = new Blob([[header, ...rows].join('\n')], {
-      type: 'text/csv;charset=utf-8;',
-    })
+    const blob = new Blob([[header, ...rows].join('\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `${classMeta.department_code || 'UPF'}-Y${classMeta.year_level}-${classMeta.group_name}-${classMeta.subject}-grades.csv`
+    link.download = (classMeta.department_code || 'UPF') + '-Y' + classMeta.year_level + '-' + classMeta.group_name + '-' + classMeta.subject + '-grades.csv'
     link.click()
     URL.revokeObjectURL(url)
+  }
+
+  function handleExportOfficialPv() {
+    exportPvSpreadsheet(
+      {
+        academicYear: classMeta.academic_year || '2026-2027',
+        session: locale === 'fr' ? 'Automne / Printemps' : 'Regular',
+        filiere: deptName || classMeta.department_code || 'UPF',
+        groupe: classMeta.group_name || 'Tous',
+        niveau: classMeta.year_level,
+        semestre: classMeta.semester_number || 1,
+        option: 'NA',
+        matiere: classMeta.subject === 'french' ? 'Francais' : 'Anglais',
+        professorName: classMeta.professor_name || 'UPF',
+        departmentCode: classMeta.department_code || 'PV',
+      },
+      students.map((st) => {
+        const d = ensureDraft(st.id)
+        return {
+          matricule: st.student_code,
+          cne: st.cne ?? '',
+          lastName: st.last_name,
+          firstName: st.first_name,
+          cc1: parseScore(d.cc1),
+          cc2: parseScore(d.cc2),
+          ex: parseScore(d.ex),
+        }
+      })
+    )
+  }
+
+  async function handlePvFileUpload(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    setError(null)
+    setFeedback(null)
+
+    try {
+      const parsed = await parsePvSpreadsheet(file)
+      if (parsed.rows.length === 0) {
+        setError('No student rows detected in the PV file.')
+        return
+      }
+
+      const supabase = createClient()
+      let matchedCount = 0
+      let importedNewCount = 0
+      const nextDrafts: Record<string, GradeDraft> = { ...gradeDrafts }
+      const updatedStudentsList: StudentItem[] = [...students]
+
+      for (const row of parsed.rows) {
+        const codeKey = row.matricule.trim().toLowerCase()
+        const cneKey = row.cne.trim().toLowerCase()
+        const nameKey = normalizeNameKey(row.lastName, row.firstName)
+
+        let matched = updatedStudentsList.find(
+          (s) =>
+            (codeKey && s.student_code.trim().toLowerCase() === codeKey) ||
+            (cneKey && (s.cne ?? '').trim().toLowerCase() === cneKey) ||
+            (nameKey && normalizeNameKey(s.last_name, s.first_name) === nameKey)
+        )
+
+        if (!matched && (row.matricule || row.cne)) {
+          const fallbackCode = row.matricule || row.cne
+          const { data: upsertedSt, error: stErr } = await supabase
+            .from('students')
+            .upsert(
+              {
+                student_code: fallbackCode,
+                cne: row.cne || null,
+                first_name: row.firstName || 'Student',
+                last_name: row.lastName || fallbackCode,
+                home_department_id: classMeta.department_id || null,
+                cohort_level: String(classMeta.year_level),
+                is_active: true,
+              },
+              { onConflict: 'student_code' }
+            )
+            .select()
+            .single()
+
+          if (!stErr && upsertedSt) {
+            await supabase
+              .from('student_enrollments')
+              .upsert(
+                { semi_module_id: classMeta.id, student_id: upsertedSt.id },
+                { onConflict: 'semi_module_id,student_id' }
+              )
+            matched = upsertedSt as StudentItem
+            updatedStudentsList.push(matched)
+            importedNewCount += 1
+          }
+        }
+
+        if (matched) {
+          matchedCount += 1
+          const prev = nextDrafts[matched.id] ?? { cc1: '', cc2: '', ex: '', notes: '' }
+          nextDrafts[matched.id] = {
+            cc1: row.cc1 !== null && row.cc1 !== undefined ? String(row.cc1) : prev.cc1,
+            cc2: row.cc2 !== null && row.cc2 !== undefined ? String(row.cc2) : prev.cc2,
+            ex: row.ex !== null && row.ex !== undefined ? String(row.ex) : prev.ex,
+            notes: prev.notes,
+          }
+        }
+      }
+
+      updatedStudentsList.sort((a, b) => a.last_name.localeCompare(b.last_name))
+      setStudents(updatedStudentsList)
+      setGradeDrafts(nextDrafts)
+      setActiveTab('grades')
+      setFeedback(
+        'PV processed: ' + matchedCount + ' row(s) synced (' + importedNewCount + ' newly enrolled). Click Save All Grades to persist.'
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to parse PV spreadsheet.')
+    }
   }
 
   async function handleSaveAllGrades() {
@@ -394,12 +506,18 @@ export default function ClassWorkspaceClient({
     try {
       const payload = students.map((st) => {
         const d = ensureDraft(st.id)
+        const vCc1 = parseScore(d.cc1)
+        const vCc2 = parseScore(d.cc2)
+        const vEx = parseScore(d.ex)
         return {
           semi_module_id: classMeta.id,
           student_id: st.id,
-          midterm: parseScore(d.midterm),
-          post_midterm: parseScore(d.post_midterm),
-          final_exam: parseScore(d.final_exam),
+          cc1: vCc1,
+          cc2: vCc2,
+          ex: vEx,
+          midterm: vCc1,
+          post_midterm: vCc2,
+          final_exam: vEx,
           notes: d.notes.trim() || null,
           updated_by: currentUserId,
           updated_at: new Date().toISOString(),
@@ -433,6 +551,7 @@ export default function ClassWorkspaceClient({
 
     try {
       const codeClean = studentCode.trim()
+      const cneClean = cne.trim() || null
       const firstClean = firstName.trim()
       const lastClean = lastName.trim()
       const emailClean = email.trim() || null
@@ -442,6 +561,7 @@ export default function ClassWorkspaceClient({
           .from('students')
           .update({
             student_code: codeClean,
+            cne: cneClean,
             first_name: firstClean,
             last_name: lastClean,
             email: emailClean,
@@ -466,6 +586,7 @@ export default function ClassWorkspaceClient({
           .upsert(
             {
               student_code: codeClean,
+              cne: cneClean,
               first_name: firstClean,
               last_name: lastClean,
               email: emailClean,
@@ -486,10 +607,7 @@ export default function ClassWorkspaceClient({
         const { error: enrErr } = await supabase
           .from('student_enrollments')
           .upsert(
-            {
-              semi_module_id: classMeta.id,
-              student_id: upserted.id,
-            },
+            { semi_module_id: classMeta.id, student_id: upserted.id },
             { onConflict: 'semi_module_id,student_id' }
           )
 
@@ -562,21 +680,22 @@ export default function ClassWorkspaceClient({
     const firstRow = parseCsvLine(lines[0]).map((h) => h.toLowerCase())
     const hasHeader =
       firstRow.includes('student_code') ||
+      firstRow.includes('matricule') ||
       firstRow.includes('code') ||
       firstRow.includes('first_name')
 
     const startIndex = hasHeader ? 1 : 0
     const codeIdx = hasHeader
-      ? Math.max(firstRow.indexOf('student_code'), firstRow.indexOf('code'), 0)
+      ? Math.max(firstRow.indexOf('student_code'), firstRow.indexOf('matricule'), firstRow.indexOf('code'), 0)
       : 0
-    const firstIdx = hasHeader
-      ? Math.max(firstRow.indexOf('first_name'), 1)
-      : 1
+    const cneIdx = hasHeader ? firstRow.indexOf('cne') : -1
+    const firstIdx = hasHeader ? Math.max(firstRow.indexOf('first_name'), 1) : 1
     const lastIdx = hasHeader ? Math.max(firstRow.indexOf('last_name'), 2) : 2
     const emailIdx = hasHeader ? firstRow.indexOf('email') : 3
 
     const rowsToImport: {
       student_code: string
+      cne: string | null
       first_name: string
       last_name: string
       email: string | null
@@ -588,14 +707,16 @@ export default function ClassWorkspaceClient({
     for (let i = startIndex; i < lines.length; i++) {
       const cols = parseCsvLine(lines[i])
       const codeVal = cols[codeIdx]?.trim()
+      const cneVal = cneIdx >= 0 ? cols[cneIdx]?.trim() || null : null
       const firstVal = cols[firstIdx]?.trim() || 'Placeholder'
-      const lastVal = cols[lastIdx]?.trim() || `Student ${i}`
+      const lastVal = cols[lastIdx]?.trim() || 'Student ' + i
       const emailVal = emailIdx >= 0 ? cols[emailIdx]?.trim() || null : null
 
       if (!codeVal) continue
 
       rowsToImport.push({
         student_code: codeVal,
+        cne: cneVal,
         first_name: firstVal,
         last_name: lastVal,
         email: emailVal,
@@ -639,21 +760,14 @@ export default function ClassWorkspaceClient({
       const map = new Map<string, StudentItem>()
       for (const s of prev) map.set(s.id, s)
       for (const s of upsertedStudents as StudentItem[]) map.set(s.id, s)
-      return Array.from(map.values()).sort((a, b) =>
-        a.last_name.localeCompare(b.last_name)
-      )
+      return Array.from(map.values()).sort((a, b) => a.last_name.localeCompare(b.last_name))
     })
 
     setGradeDrafts((prev) => {
       const next = { ...prev }
       for (const s of upsertedStudents) {
         if (!next[s.id]) {
-          next[s.id] = {
-            midterm: '',
-            post_midterm: '',
-            final_exam: '',
-            notes: '',
-          }
+          next[s.id] = { cc1: '', cc2: '', ex: '', notes: '' }
         }
       }
       return next
@@ -663,7 +777,7 @@ export default function ClassWorkspaceClient({
       setSelectedStudentId(upsertedStudents[0].id)
     }
 
-    setFeedback(`${upsertedStudents.length} student(s) imported into this class.`)
+    setFeedback(upsertedStudents.length + ' student(s) imported into this class.')
     router.refresh()
   }
 
@@ -698,11 +812,7 @@ export default function ClassWorkspaceClient({
 
       setAbsences((prev) => {
         const filtered = prev.filter(
-          (a) =>
-            !(
-              a.student_id === saved.student_id &&
-              a.session_date === saved.session_date
-            )
+          (a) => !(a.student_id === saved.student_id && a.session_date === saved.session_date)
         )
         return [saved as AbsenceRecord, ...filtered].sort((a, b) =>
           b.session_date.localeCompare(a.session_date)
@@ -717,34 +827,28 @@ export default function ClassWorkspaceClient({
 
   async function handleDeleteAbsence(id: string) {
     const supabase = createClient()
-    const { error: delErr } = await supabase
-      .from('student_absences')
-      .delete()
-      .eq('id', id)
-
+    const { error: delErr } = await supabase.from('student_absences').delete().eq('id', id)
     if (!delErr) {
       setAbsences((prev) => prev.filter((a) => a.id !== id))
       router.refresh()
     }
   }
 
-  const gradedAverages = students
-    .map((s) => computeAverage(gradeDrafts[s.id]))
-    .filter((v): v is number => v !== null)
+  const gradedSummaries = students
+    .map((s) => getSummaryForStudent(s.id))
+    .filter((sum) => sum.average20 !== null)
 
   const classAverage =
-    gradedAverages.length > 0
-      ? (
-          gradedAverages.reduce((acc, v) => acc + v, 0) / gradedAverages.length
-        ).toFixed(2)
-      : '—'
+    gradedSummaries.length > 0
+      ? (gradedSummaries.reduce((acc, s) => acc + (s.average20 ?? 0), 0) / gradedSummaries.length).toFixed(2)
+      : '--'
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
         <div>
           <Link
-            href={`/departments/${classMeta.department_id}`}
+            href={'/departments/' + classMeta.department_id}
             className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
@@ -754,9 +858,8 @@ export default function ClassWorkspaceClient({
             {classTitle}
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            {deptName} • Year {classMeta.year_level} •{' '}
-            {t.studentsCount(students.length)}
-            {classMeta.room_number ? ` • ${classMeta.room_number}` : ''}
+            {deptName} | Year {classMeta.year_level} | {students.length} students
+            {classMeta.room_number ? ' | ' + classMeta.room_number : ''}
           </p>
         </div>
 
@@ -770,15 +873,16 @@ export default function ClassWorkspaceClient({
             {t.downloadTemplate}
           </button>
 
-          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800">
             <Upload className="h-3.5 w-3.5" />
             {t.importCsv}
-            <input
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleCsvUpload}
-              className="hidden"
-            />
+            <input type="file" accept=".csv,text/csv" onChange={handleCsvUpload} className="hidden" />
+          </label>
+
+          <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200 dark:hover:bg-amber-950">
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            {t.importPv}
+            <input type="file" accept=".xls,.xlsx,.csv" onChange={handlePvFileUpload} className="hidden" />
           </label>
 
           <button
@@ -805,16 +909,15 @@ export default function ClassWorkspaceClient({
         </div>
       )}
 
-      {/* Workspace Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">
         <button
           type="button"
           onClick={() => setActiveTab('roster')}
-          className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          className={
             activeTab === 'roster'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
-          }`}
+              ? 'cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition'
+              : 'cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
+          }
         >
           {t.tabRoster} ({students.length})
         </button>
@@ -822,11 +925,11 @@ export default function ClassWorkspaceClient({
         <button
           type="button"
           onClick={() => setActiveTab('absences')}
-          className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          className={
             activeTab === 'absences'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
-          }`}
+              ? 'cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition'
+              : 'cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
+          }
         >
           {t.tabAbsences} ({absences.length})
         </button>
@@ -834,11 +937,11 @@ export default function ClassWorkspaceClient({
         <button
           type="button"
           onClick={() => setActiveTab('grades')}
-          className={`cursor-pointer rounded-lg px-4 py-2 text-sm font-semibold transition ${
+          className={
             activeTab === 'grades'
-              ? 'bg-blue-600 text-white'
-              : 'bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
-          }`}
+              ? 'cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition'
+              : 'cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-100 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-800'
+          }
         >
           {t.tabGrades}
         </button>
@@ -853,6 +956,7 @@ export default function ClassWorkspaceClient({
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wider text-slate-500 uppercase dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
                   <th className="px-5 py-3.5">{t.codeCol}</th>
+                  <th className="px-5 py-3.5">{t.cneCol}</th>
                   <th className="px-5 py-3.5">{t.nameCol}</th>
                   <th className="px-5 py-3.5">{t.emailCol}</th>
                   <th className="px-5 py-3.5">{t.absencesCol}</th>
@@ -864,33 +968,30 @@ export default function ClassWorkspaceClient({
                   const absCount = getAbsenceCount(st.id)
                   const overLimit = absCount >= classMeta.max_absences_allowed
                   return (
-                    <tr
-                      key={st.id}
-                      className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
-                    >
+                    <tr key={st.id} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                       <td className="px-5 py-3.5 font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
                         {st.student_code}
                       </td>
+                      <td className="px-5 py-3.5 font-mono text-xs text-slate-500 dark:text-slate-400">
+                        {st.cne || '--'}
+                      </td>
                       <td className="px-5 py-3.5 font-semibold text-slate-900 dark:text-white">
-                        <Link
-                          href={`/students/${st.id}`}
-                          className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
-                        >
+                        <Link href={'/students/' + st.id} className="hover:text-blue-600 hover:underline dark:hover:text-blue-400">
                           {st.first_name} {st.last_name}
                         </Link>
                       </td>
                       <td className="px-5 py-3.5 text-slate-500 dark:text-slate-400">
-                        {st.email || '—'}
+                        {st.email || '--'}
                       </td>
                       <td className="px-5 py-3.5">
                         <span
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          className={
                             overLimit
-                              ? 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                              ? 'inline-flex items-center gap-1 rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950/60 dark:text-red-300'
                               : absCount > 0
-                                ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
-                          }`}
+                                ? 'inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                                : 'inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          }
                         >
                           {overLimit && <AlertTriangle className="h-3 w-3" />}
                           {absCount} / {classMeta.max_absences_allowed}
@@ -920,10 +1021,7 @@ export default function ClassWorkspaceClient({
 
                 {students.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={5}
-                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
-                    >
+                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                       {t.noStudents}
                     </td>
                   </tr>
@@ -981,11 +1079,7 @@ export default function ClassWorkspaceClient({
               </label>
               <select
                 value={absenceStatus}
-                onChange={(e) =>
-                  setAbsenceStatus(
-                    e.target.value as 'absent' | 'late' | 'excused'
-                  )
-                }
+                onChange={(e) => setAbsenceStatus(e.target.value as 'absent' | 'late' | 'excused')}
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
               >
                 <option value="absent">{t.statusAbsent}</option>
@@ -1035,19 +1129,17 @@ export default function ClassWorkspaceClient({
                         {rec.session_date}
                       </td>
                       <td className="px-5 py-3.5 font-medium text-slate-900 dark:text-white">
-                        {st
-                          ? `${st.first_name} ${st.last_name} (${st.student_code})`
-                          : rec.student_id}
+                        {st ? st.first_name + ' ' + st.last_name + ' (' + st.student_code + ')' : rec.student_id}
                       </td>
                       <td className="px-5 py-3.5">
                         <span
-                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                          className={
                             rec.status === 'absent'
-                              ? 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                              ? 'inline-flex rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950/60 dark:text-red-300'
                               : rec.status === 'late'
-                                ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                                : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                          }`}
+                                ? 'inline-flex rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                                : 'inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                          }
                         >
                           {rec.status === 'absent'
                             ? t.statusAbsent
@@ -1057,7 +1149,7 @@ export default function ClassWorkspaceClient({
                         </span>
                       </td>
                       <td className="px-5 py-3.5 text-slate-500 dark:text-slate-400">
-                        {rec.reason || '—'}
+                        {rec.reason || '--'}
                       </td>
                       <td className="px-5 py-3.5">
                         <button
@@ -1074,10 +1166,7 @@ export default function ClassWorkspaceClient({
 
                 {absences.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={5}
-                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
-                    >
+                    <td colSpan={5} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                       {t.noAbsences}
                     </td>
                   </tr>
@@ -1092,19 +1181,14 @@ export default function ClassWorkspaceClient({
         <div className="space-y-4">
           <div className="flex flex-col justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center">
             <div className="space-y-1">
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                {t.gradebookHint}
-              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">{t.gradebookHint}</p>
               <div className="flex flex-wrap gap-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
                 <span>
                   {t.classAverageLabel}:{' '}
-                  <strong className="text-blue-600 dark:text-blue-400">
-                    {classAverage} / 20
-                  </strong>
+                  <strong className="text-blue-600 dark:text-blue-400">{classAverage} / 20</strong>
                 </span>
                 <span>
-                  {t.gradedCountLabel}: {gradedAverages.length} /{' '}
-                  {students.length}
+                  {t.gradedCountLabel}: {gradedSummaries.length} / {students.length}
                 </span>
               </div>
             </div>
@@ -1112,11 +1196,21 @@ export default function ClassWorkspaceClient({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                onClick={handleExportOfficialPv}
+                disabled={students.length === 0}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2 text-xs font-semibold text-amber-900 transition hover:bg-amber-100 disabled:opacity-50 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200 dark:hover:bg-amber-950"
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5" />
+                {t.exportPv}
+              </button>
+
+              <button
+                type="button"
                 onClick={handleExportGradesCsv}
                 disabled={students.length === 0}
                 className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800"
               >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
+                <Download className="h-3.5 w-3.5" />
                 {t.exportGradesCsv}
               </button>
 
@@ -1138,9 +1232,9 @@ export default function ClassWorkspaceClient({
                 <tr>
                   <th className="px-4 py-3.5">{t.codeCol}</th>
                   <th className="px-4 py-3.5">{t.nameCol}</th>
-                  <th className="px-4 py-3.5">{t.midtermCol}</th>
-                  <th className="px-4 py-3.5">{t.postMidtermCol}</th>
-                  <th className="px-4 py-3.5">{t.finalCol}</th>
+                  <th className="px-4 py-3.5">{t.cc1Col}</th>
+                  <th className="px-4 py-3.5">{t.cc2Col}</th>
+                  <th className="px-4 py-3.5">{t.exCol}</th>
                   <th className="px-4 py-3.5">{t.averageCol}</th>
                   <th className="px-4 py-3.5">{t.remarksCol}</th>
                 </tr>
@@ -1148,21 +1242,15 @@ export default function ClassWorkspaceClient({
               <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                 {students.map((st) => {
                   const draft = ensureDraft(st.id)
-                  const avg = computeAverage(draft)
-                  const passing = avg !== null && avg >= 10
+                  const summary = getSummaryForStudent(st.id)
+                  const passing = summary.average20 !== null && summary.average20 >= 10
                   return (
-                    <tr
-                      key={st.id}
-                      className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
-                    >
+                    <tr key={st.id} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
                       <td className="px-4 py-3 font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
                         {st.student_code}
                       </td>
                       <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">
-                        <Link
-                          href={`/students/${st.id}`}
-                          className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
-                        >
+                        <Link href={'/students/' + st.id} className="hover:text-blue-600 hover:underline dark:hover:text-blue-400">
                           {st.first_name} {st.last_name}
                         </Link>
                       </td>
@@ -1172,11 +1260,9 @@ export default function ClassWorkspaceClient({
                           step="0.25"
                           min="0"
                           max="20"
-                          value={draft.midterm}
-                          onChange={(e) =>
-                            updateGradeField(st.id, 'midterm', e.target.value)
-                          }
-                          placeholder="—"
+                          value={draft.cc1}
+                          onChange={(e) => updateGradeField(st.id, 'cc1', e.target.value)}
+                          placeholder="--"
                           className="w-24 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                         />
                       </td>
@@ -1186,15 +1272,9 @@ export default function ClassWorkspaceClient({
                           step="0.25"
                           min="0"
                           max="20"
-                          value={draft.post_midterm}
-                          onChange={(e) =>
-                            updateGradeField(
-                              st.id,
-                              'post_midterm',
-                              e.target.value
-                            )
-                          }
-                          placeholder="—"
+                          value={draft.cc2}
+                          onChange={(e) => updateGradeField(st.id, 'cc2', e.target.value)}
+                          placeholder="--"
                           className="w-24 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                         />
                       </td>
@@ -1204,36 +1284,39 @@ export default function ClassWorkspaceClient({
                           step="0.25"
                           min="0"
                           max="20"
-                          value={draft.final_exam}
-                          onChange={(e) =>
-                            updateGradeField(st.id, 'final_exam', e.target.value)
-                          }
-                          placeholder="—"
+                          value={draft.ex}
+                          onChange={(e) => updateGradeField(st.id, 'ex', e.target.value)}
+                          placeholder="--"
                           className="w-24 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                         />
                       </td>
                       <td className="px-4 py-3">
-                        {avg !== null ? (
-                          <span
-                            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                              passing
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                : 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
-                            }`}
-                          >
-                            {avg.toFixed(2)}
-                          </span>
+                        {summary.average20 !== null ? (
+                          <div className="flex flex-col gap-0.5">
+                            <span
+                              className={
+                                passing
+                                  ? 'inline-flex w-fit rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-bold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                  : 'inline-flex w-fit rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-bold text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                              }
+                            >
+                              {summary.average20.toFixed(2)} / 20
+                            </span>
+                            {summary.percentage !== null && (
+                              <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                                {summary.percentage.toFixed(1)}%
+                              </span>
+                            )}
+                          </div>
                         ) : (
-                          <span className="text-xs text-slate-400">—</span>
+                          <span className="text-xs text-slate-400">--</span>
                         )}
                       </td>
                       <td className="px-4 py-3">
                         <input
                           type="text"
                           value={draft.notes}
-                          onChange={(e) =>
-                            updateGradeField(st.id, 'notes', e.target.value)
-                          }
+                          onChange={(e) => updateGradeField(st.id, 'notes', e.target.value)}
                           placeholder="Optional note..."
                           className="w-44 rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
                         />
@@ -1244,10 +1327,7 @@ export default function ClassWorkspaceClient({
 
                 {students.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={7}
-                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
-                    >
+                    <td colSpan={7} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
                       {t.noStudents}
                     </td>
                   </tr>
@@ -1275,17 +1355,31 @@ export default function ClassWorkspaceClient({
             </div>
 
             <form onSubmit={handleSaveStudent} className="space-y-4">
-              <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
-                  {t.studentCodeLabel}
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={studentCode}
-                  onChange={(e) => setStudentCode(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
-                />
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    {t.studentCodeLabel}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={studentCode}
+                    onChange={(e) => setStudentCode(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                    {t.cneLabel}
+                  </label>
+                  <input
+                    type="text"
+                    value={cne}
+                    onChange={(e) => setCne(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
