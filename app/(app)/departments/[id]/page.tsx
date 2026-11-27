@@ -1,7 +1,7 @@
 export const dynamic = 'force-dynamic'
 
 import { cookies } from 'next/headers'
-import { redirect } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import { getLocale } from 'next-intl/server'
 import { createClient } from '@/lib/supabase/server'
 import DepartmentView, {
@@ -27,7 +27,7 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
     redirect('/login')
   }
 
-  const { data: profile, error: profileError } = await supabase
+  const { data: profile } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', userId)
@@ -53,31 +53,16 @@ export default async function DepartmentDetailPage({ params }: PageProps) {
   const canManage =
     profile.role === 'admin' || profile.role === 'dept_head'
 
-  const { data: dept, error: deptError } = await supabase
+  const { data: dept } = await supabase
     .from('departments')
-    .select('id, code, name_en, name_fr, color_accent')
+    .select(
+      'id, code, name_en, name_fr, color_accent, assistant_name, assistant_phone, assistant_email'
+    )
     .eq('id', id)
     .maybeSingle()
 
   if (!dept) {
-    const deptErrMsg =
-      deptError && typeof deptError === 'object' && 'message' in deptError
-        ? String((deptError as { message: string }).message)
-        : 'none'
-    const profErrMsg =
-      profileError && typeof profileError === 'object' && 'message' in profileError
-        ? String((profileError as { message: string }).message)
-        : 'none'
-
-    return (
-      <div className="mx-auto max-w-2xl rounded-xl border border-amber-300 bg-amber-50 p-6 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200">
-        <p className="font-bold">Department lookup returned empty on live server</p>
-        <p className="mt-2 font-mono text-xs">Requested ID: {id}</p>
-        <p className="mt-1 font-mono text-xs">Role: {profile.role}</p>
-        <p className="mt-1 font-mono text-xs">Profile Error: {profErrMsg}</p>
-        <p className="mt-1 font-mono text-xs">Department Error: {deptErrMsg}</p>
-      </div>
-    )
+    notFound()
   }
 
   const { data: semesters } = await supabase

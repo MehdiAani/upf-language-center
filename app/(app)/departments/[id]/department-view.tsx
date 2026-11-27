@@ -9,7 +9,10 @@ import {
   Calendar,
   Clock,
   DoorOpen,
+  Headset,
+  Mail,
   Pencil,
+  Phone,
   Plus,
   Trash2,
   UserCheck,
@@ -24,6 +27,9 @@ export interface DepartmentInfo {
   name_en: string
   name_fr: string
   color_accent: string
+  assistant_name: string | null
+  assistant_phone: string | null
+  assistant_email: string | null
 }
 
 export interface ProfessorOption {
@@ -69,6 +75,19 @@ const COPY = {
     back: 'Back to Dashboard',
     yearTab: (y: number) => `Year ${y}`,
     addClass: 'Add Course / Class',
+    assistantCardTitle: 'Department Administrative Assistant',
+    assistantCardSubtitle: 'Equipment, rooms, exams & departmental logistics',
+    noAssistantYet: 'No department assistant assigned yet.',
+    editAssistant: 'Edit Contact',
+    addAssistant: 'Assign Assistant',
+    assistantModalTitle: 'Department Assistant Contact',
+    assistantNameLabel: 'Assistant Full Name',
+    assistantNamePlaceholder: 'e.g. Salma Bennani',
+    assistantPhoneLabel: 'Phone Number',
+    assistantPhonePlaceholder: 'e.g. +212 6 00 00 00 00',
+    assistantEmailLabel: 'Email Address',
+    assistantEmailPlaceholder: 'e.g. assistant.esmab@upf.ac.ma',
+    saveAssistant: 'Save Contact',
     englishSection: 'English Courses',
     frenchSection: 'French Courses',
     noClasses: 'No courses configured for this track yet.',
@@ -110,6 +129,19 @@ const COPY = {
     back: 'Retour au tableau de bord',
     yearTab: (y: number) => (y === 1 ? '1ere Annee' : `${y}eme Annee`),
     addClass: 'Ajouter un cours',
+    assistantCardTitle: 'Assistante Administrative du Departement',
+    assistantCardSubtitle: 'Materiel, salles, examens & logistique du departement',
+    noAssistantYet: 'Aucune assistante renseignee pour ce departement.',
+    editAssistant: 'Modifier le contact',
+    addAssistant: 'Ajouter une assistante',
+    assistantModalTitle: 'Contact de l’Assistante du Departement',
+    assistantNameLabel: 'Nom complet de l’assistante',
+    assistantNamePlaceholder: 'ex. Salma Bennani',
+    assistantPhoneLabel: 'Numero de telephone',
+    assistantPhonePlaceholder: 'ex. +212 6 00 00 00 00',
+    assistantEmailLabel: 'Adresse e-mail',
+    assistantEmailPlaceholder: 'ex. assistante.esmab@upf.ac.ma',
+    saveAssistant: 'Enregistrer le contact',
     englishSection: "Cours d'Anglais",
     frenchSection: 'Cours de Francais',
     noClasses: 'Aucun cours configure pour cette langue.',
@@ -161,6 +193,23 @@ export default function DepartmentView({
   const router = useRouter()
   const t = COPY[locale]
 
+  // Department Assistant Contact state
+  const [assistantName, setAssistantName] = useState(
+    department.assistant_name ?? ''
+  )
+  const [assistantPhone, setAssistantPhone] = useState(
+    department.assistant_phone ?? ''
+  )
+  const [assistantEmail, setAssistantEmail] = useState(
+    department.assistant_email ?? ''
+  )
+  const [assistantModalOpen, setAssistantModalOpen] = useState(false)
+  const [draftAssistantName, setDraftAssistantName] = useState('')
+  const [draftAssistantPhone, setDraftAssistantPhone] = useState('')
+  const [draftAssistantEmail, setDraftAssistantEmail] = useState('')
+  const [savingAssistant, setSavingAssistant] = useState(false)
+  const [assistantError, setAssistantError] = useState<string | null>(null)
+
   const [selectedYear, setSelectedYear] = useState<number>(1)
   const [classes, setClasses] = useState<ClassItem[]>(initialClasses)
   const [modalOpen, setModalOpen] = useState(false)
@@ -179,6 +228,53 @@ export default function DepartmentView({
   const yearClasses = classes.filter((c) => c.year_level === selectedYear)
   const englishClasses = yearClasses.filter((c) => c.subject === 'english')
   const frenchClasses = yearClasses.filter((c) => c.subject === 'french')
+
+  const hasAssistantInfo = Boolean(
+    assistantName.trim() || assistantPhone.trim() || assistantEmail.trim()
+  )
+
+  function openAssistantModal() {
+    setDraftAssistantName(assistantName)
+    setDraftAssistantPhone(assistantPhone)
+    setDraftAssistantEmail(assistantEmail)
+    setAssistantError(null)
+    setAssistantModalOpen(true)
+  }
+
+  async function handleSaveAssistant(e: FormEvent) {
+    e.preventDefault()
+    setSavingAssistant(true)
+    setAssistantError(null)
+
+    const supabase = createClient()
+    const cleanName = draftAssistantName.trim() || null
+    const cleanPhone = draftAssistantPhone.trim() || null
+    const cleanEmail = draftAssistantEmail.trim() || null
+
+    try {
+      const { error: updateErr } = await supabase
+        .from('departments')
+        .update({
+          assistant_name: cleanName,
+          assistant_phone: cleanPhone,
+          assistant_email: cleanEmail,
+        })
+        .eq('id', department.id)
+
+      if (updateErr) {
+        setAssistantError(updateErr.message)
+        return
+      }
+
+      setAssistantName(cleanName ?? '')
+      setAssistantPhone(cleanPhone ?? '')
+      setAssistantEmail(cleanEmail ?? '')
+      setAssistantModalOpen(false)
+      router.refresh()
+    } finally {
+      setSavingAssistant(false)
+    }
+  }
 
   function getProfessorName(id: string | null) {
     if (!id) return t.unassigned
@@ -505,6 +601,7 @@ export default function DepartmentView({
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      {/* Header Row */}
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div>
           <Link
@@ -542,6 +639,75 @@ export default function DepartmentView({
         )}
       </div>
 
+      {/* Department Assistant Contact Card */}
+      <div className="flex flex-col justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900 sm:flex-row sm:items-center">
+        <div className="flex items-start gap-3.5">
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white"
+            style={{ backgroundColor: department.color_accent || '#1d4ed8' }}
+          >
+            <Headset className="h-5 w-5" />
+          </div>
+
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
+                {t.assistantCardTitle}
+              </span>
+              <span className="hidden text-xs text-slate-400 sm:inline">
+                • {t.assistantCardSubtitle}
+              </span>
+            </div>
+
+            {hasAssistantInfo ? (
+              <div className="mt-1.5 flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm">
+                {assistantName && (
+                  <span className="font-bold text-slate-900 dark:text-white">
+                    {assistantName}
+                  </span>
+                )}
+
+                {assistantPhone && (
+                  <a
+                    href={`tel:${assistantPhone.replace(/\s+/g, '')}`}
+                    className="inline-flex items-center gap-1.5 font-medium text-slate-600 transition hover:text-blue-600 dark:text-slate-300 dark:hover:text-blue-400"
+                  >
+                    <Phone className="h-3.5 w-3.5 text-emerald-500" />
+                    <span>{assistantPhone}</span>
+                  </a>
+                )}
+
+                {assistantEmail && (
+                  <a
+                    href={`mailto:${assistantEmail}`}
+                    className="inline-flex items-center gap-1.5 font-medium text-slate-600 transition hover:text-blue-600 dark:text-slate-300 dark:hover:text-blue-400"
+                  >
+                    <Mail className="h-3.5 w-3.5 text-blue-500" />
+                    <span>{assistantEmail}</span>
+                  </a>
+                )}
+              </div>
+            ) : (
+              <p className="mt-1 text-sm italic text-slate-400">
+                {t.noAssistantYet}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {canManage && (
+          <button
+            type="button"
+            onClick={openAssistantModal}
+            className="inline-flex cursor-pointer items-center gap-1.5 self-start rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 sm:self-center"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+            {hasAssistantInfo ? t.editAssistant : t.addAssistant}
+          </button>
+        )}
+      </div>
+
+      {/* Year Level Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 dark:border-slate-800">
         {YEARS.map((year) => {
           const count = classes.filter((c) => c.year_level === year).length
@@ -572,6 +738,7 @@ export default function DepartmentView({
         })}
       </div>
 
+      {/* English & French Course Grids */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <section className="space-y-4">
           <div className="flex items-center justify-between">
@@ -624,6 +791,91 @@ export default function DepartmentView({
         </section>
       </div>
 
+      {/* Edit Department Assistant Modal */}
+      {assistantModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                {t.assistantModalTitle} ({department.code})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setAssistantModalOpen(false)}
+                className="cursor-pointer rounded-lg p-1 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {assistantError && (
+              <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/50 dark:text-red-300">
+                {assistantError}
+              </div>
+            )}
+
+            <form onSubmit={handleSaveAssistant} className="space-y-4">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {t.assistantNameLabel}
+                </label>
+                <input
+                  type="text"
+                  value={draftAssistantName}
+                  onChange={(e) => setDraftAssistantName(e.target.value)}
+                  placeholder={t.assistantNamePlaceholder}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {t.assistantPhoneLabel}
+                </label>
+                <input
+                  type="tel"
+                  value={draftAssistantPhone}
+                  onChange={(e) => setDraftAssistantPhone(e.target.value)}
+                  placeholder={t.assistantPhonePlaceholder}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
+                  {t.assistantEmailLabel}
+                </label>
+                <input
+                  type="email"
+                  value={draftAssistantEmail}
+                  onChange={(e) => setDraftAssistantEmail(e.target.value)}
+                  placeholder={t.assistantEmailPlaceholder}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAssistantModalOpen(false)}
+                  className="cursor-pointer rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
+                >
+                  {t.cancel}
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingAssistant}
+                  className="cursor-pointer rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {savingAssistant ? t.saving : t.saveAssistant}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add / Edit Course Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-800 dark:bg-slate-900">
