@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { ThemeToggle } from '@/app/theme-toggle'
+import { UpfLogo } from '@/components/upf-logo'
 import type { SemesterOption } from './layout'
 
 interface Profile {
@@ -136,12 +137,13 @@ export default function DashboardShell({
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <div className="flex h-16 items-center justify-between border-b border-slate-200 px-5 dark:border-slate-800">
+        <div className="flex h-16 items-center justify-between border-b border-slate-200 px-4 dark:border-slate-800">
           <Link
             href="/dashboard"
-            className="text-sm font-bold tracking-tight text-slate-900 dark:text-white"
+            className="flex items-center overflow-hidden py-1"
+            aria-label={t.brand}
           >
-            {t.brand}
+            <UpfLogo className="h-8 w-auto max-w-[195px]" />
           </Link>
           <button
             type="button"
