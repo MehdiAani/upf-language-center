@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, type ChangeEvent, type FormEvent } from 'react'
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -13,6 +13,7 @@ import {
   Pencil,
   Save,
   Trash2,
+  Undo2,
   Upload,
   UserPlus,
   X,
@@ -86,6 +87,13 @@ interface GradeDraft {
   notes: string
 }
 
+interface WorkspaceSnapshot {
+  label: string
+  students: StudentItem[]
+  absences: AbsenceRecord[]
+  gradeDrafts: Record<string, GradeDraft>
+}
+
 interface ClassWorkspaceClientProps {
   classMeta: ClassMeta
   currentUserId: string | null
@@ -101,11 +109,14 @@ const COPY = {
     addStudent: 'Add Student',
     editStudent: 'Edit Student',
     importCsv: 'Import .CSV',
-    importPv: 'Import PV (.xls/.xlsx)',
+    importPv: 'Import PV / Roster (.xls/.xlsx)',
     exportPv: 'Export Official PV',
     downloadTemplate: 'CSV Template',
+    undoAction: 'Undo',
+    removeSelected: 'Remove Selected',
+    deleteSelectedPermanently: 'Delete Selected Students',
     csvHint:
-      'CSV columns: student_code, cne, first_name, last_name, email (optional). You can also import a PV (.xls / .xlsx) to pull CC1, CC2, and EX grades.',
+      'Supports PV files (.xls/.xlsx), placement/roster sheets with Nom et Prenom or Nom + Prenom, and CSV files even when grades are not included.',
     tabRoster: 'Student Roster',
     tabAbsences: 'Absence Tracker',
     tabGrades: 'Gradebook (CC1 / CC2 / EX)',
@@ -125,6 +136,12 @@ const COPY = {
     save: 'Save Student',
     saving: 'Saving...',
     removeConfirm: 'Remove this student from this class?',
+    bulkRemoveConfirm: (n: number) =>
+      'Remove ' + n + ' selected student(s) from this class?',
+    bulkDeleteConfirm: (n: number) =>
+      'Permanently delete ' +
+      n +
+      ' selected student record(s) from the system so they no longer appear in search?',
     sessionDateLabel: 'Session Date',
     statusLabel: 'Status',
     reasonLabel: 'Note / Reason (Optional)',
@@ -152,11 +169,14 @@ const COPY = {
     addStudent: 'Ajouter un etudiant',
     editStudent: "Modifier l'etudiant",
     importCsv: 'Importer .CSV',
-    importPv: 'Importer PV (.xls/.xlsx)',
+    importPv: 'Importer PV / Liste (.xls/.xlsx)',
     exportPv: 'Exporter PV Officiel',
     downloadTemplate: 'Modele CSV',
+    undoAction: 'Annuler (Ctrl+Z)',
+    removeSelected: 'Retirer selection',
+    deleteSelectedPermanently: 'Supprimer etudiants selectionnes',
     csvHint:
-      'Colonnes CSV : student_code, cne, first_name, last_name, email (optionnel). Vous pouvez aussi importer un PV (.xls / .xlsx) pour charger CC1, CC2 et EX.',
+      'Prend en charge les PV (.xls/.xlsx), les listes ou tests de placement avec Nom et Prenom ou Nom + Prenom, et les CSV meme sans notes.',
     tabRoster: 'Liste des etudiants',
     tabAbsences: 'Suivi des absences',
     tabGrades: 'Notes (CC1 / CC2 / EX)',
@@ -176,6 +196,12 @@ const COPY = {
     save: 'Enregistrer',
     saving: 'Enregistrement...',
     removeConfirm: 'Retirer cet etudiant de cette classe ?',
+    bulkRemoveConfirm: (n: number) =>
+      'Retirer ' + n + ' etudiant(s) selectionne(s) de cette classe ?',
+    bulkDeleteConfirm: (n: number) =>
+      'Supprimer definitivement ' +
+      n +
+      ' fiche(s) etudiant(s) afin qu elles n apparaissent plus dans la recherche ?',
     sessionDateLabel: 'Date de seance',
     statusLabel: 'Statut',
     reasonLabel: 'Remarque / Motif (Optionnel)',
@@ -256,6 +282,8 @@ export default function ClassWorkspaceClient({
   const [activeTab, setActiveTab] = useState<'roster' | 'absences' | 'grades'>('roster')
   const [students, setStudents] = useState<StudentItem[]>(initialStudents)
   const [absences, setAbsences] = useState<AbsenceRecord[]>(initialAbsences)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const [historyStack, setHistoryStack] = useState<WorkspaceSnapshot[]>([])
 
   const [gradeDrafts, setGradeDrafts] = useState<Record<string, GradeDraft>>(() => {
     const map: Record<string, GradeDraft> = {}
@@ -296,6 +324,46 @@ export default function ClassWorkspaceClient({
   const classTitle = locale === 'fr' ? classMeta.title_fr : classMeta.title_en
   const deptName = locale === 'fr' ? classMeta.department_name_fr : classMeta.department_name_en
 
+  function pushSnapshot(label: string) {
+    setHistoryStack((prev) => [
+      ...prev.slice(-19),
+      {
+        label,
+        students: [...students],
+        absences: [...absences],
+        gradeDrafts: { ...gradeDrafts },
+      },
+    ])
+  }
+
+  function handleUndo() {
+    if (historyStack.length === 0) return
+    const last = historyStack[historyStack.length - 1]
+    setHistoryStack((prev) => prev.slice(0, -1))
+    setStudents(last.students)
+    setAbsences(last.absences)
+    setGradeDrafts(last.gradeDrafts)
+    setSelectedIds([])
+    setError(null)
+    setFeedback('Reverted: ' + last.label)
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement | null)?.tagName
+      const isEditingText =
+        tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !isEditingText) {
+        if (historyStack.length > 0) {
+          e.preventDefault()
+          handleUndo()
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  })
+
   function getAbsenceCount(studentId: string) {
     return absences.filter((a) => a.student_id === studentId && a.status === 'absent').length
   }
@@ -314,6 +382,20 @@ export default function ClassWorkspaceClient({
       ...prev,
       [studentId]: { ...ensureDraft(studentId), [field]: value },
     }))
+  }
+
+  function toggleSelectStudent(studentId: string) {
+    setSelectedIds((prev) =>
+      prev.includes(studentId) ? prev.filter((id) => id !== studentId) : [...prev, studentId]
+    )
+  }
+
+  function toggleSelectAll() {
+    if (selectedIds.length === students.length) {
+      setSelectedIds([])
+    } else {
+      setSelectedIds(students.map((s) => s.id))
+    }
   }
 
   function openAddModal() {
@@ -345,7 +427,13 @@ export default function ClassWorkspaceClient({
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = (classMeta.department_code || 'UPF') + '-Y' + classMeta.year_level + '-' + classMeta.group_name + '-template.csv'
+    link.download =
+      (classMeta.department_code || 'UPF') +
+      '-Y' +
+      classMeta.year_level +
+      '-' +
+      classMeta.group_name +
+      '-template.csv'
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -373,7 +461,15 @@ export default function ClassWorkspaceClient({
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = (classMeta.department_code || 'UPF') + '-Y' + classMeta.year_level + '-' + classMeta.group_name + '-' + classMeta.subject + '-grades.csv'
+    link.download =
+      (classMeta.department_code || 'UPF') +
+      '-Y' +
+      classMeta.year_level +
+      '-' +
+      classMeta.group_name +
+      '-' +
+      classMeta.subject +
+      '-grades.csv'
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -418,13 +514,16 @@ export default function ClassWorkspaceClient({
     try {
       const parsed = await parsePvSpreadsheet(file)
       if (parsed.rows.length === 0) {
-        setError('No student rows detected in the PV file.')
+        setError('No student rows detected in the file.')
         return
       }
+
+      pushSnapshot('Import from ' + file.name)
 
       const supabase = createClient()
       let matchedCount = 0
       let importedNewCount = 0
+      let gradesSyncedCount = 0
       const nextDrafts: Record<string, GradeDraft> = { ...gradeDrafts }
       const updatedStudentsList: StudentItem[] = [...students]
 
@@ -432,24 +531,34 @@ export default function ClassWorkspaceClient({
         const codeKey = row.matricule.trim().toLowerCase()
         const cneKey = row.cne.trim().toLowerCase()
         const nameKey = normalizeNameKey(row.lastName, row.firstName)
+        const emailKey = (row.email ?? '').trim().toLowerCase()
 
         let matched = updatedStudentsList.find(
           (s) =>
             (codeKey && s.student_code.trim().toLowerCase() === codeKey) ||
             (cneKey && (s.cne ?? '').trim().toLowerCase() === cneKey) ||
+            (emailKey && (s.email ?? '').trim().toLowerCase() === emailKey) ||
             (nameKey && normalizeNameKey(s.last_name, s.first_name) === nameKey)
         )
 
-        if (!matched && (row.matricule || row.cne)) {
-          const fallbackCode = row.matricule || row.cne
+        if (!matched) {
+          const uniqueCode =
+            row.matricule ||
+            row.cne ||
+            'UPF-' +
+              (classMeta.department_code || 'STU') +
+              '-' +
+              String(updatedStudentsList.length + importedNewCount + 1).padStart(3, '0')
+
           const { data: upsertedSt, error: stErr } = await supabase
             .from('students')
             .upsert(
               {
-                student_code: fallbackCode,
+                student_code: uniqueCode,
                 cne: row.cne || null,
                 first_name: row.firstName || 'Student',
-                last_name: row.lastName || fallbackCode,
+                last_name: row.lastName || '',
+                email: row.email || null,
                 home_department_id: classMeta.department_id || null,
                 cohort_level: String(classMeta.year_level),
                 is_active: true,
@@ -474,11 +583,15 @@ export default function ClassWorkspaceClient({
 
         if (matched) {
           matchedCount += 1
+          const hasAnyGrade =
+            row.cc1 !== null || row.cc2 !== null || row.ex !== null
+          if (hasAnyGrade) gradesSyncedCount += 1
+
           const prev = nextDrafts[matched.id] ?? { cc1: '', cc2: '', ex: '', notes: '' }
           nextDrafts[matched.id] = {
-            cc1: row.cc1 !== null && row.cc1 !== undefined ? String(row.cc1) : prev.cc1,
-            cc2: row.cc2 !== null && row.cc2 !== undefined ? String(row.cc2) : prev.cc2,
-            ex: row.ex !== null && row.ex !== undefined ? String(row.ex) : prev.ex,
+            cc1: row.cc1 !== null ? String(row.cc1) : prev.cc1,
+            cc2: row.cc2 !== null ? String(row.cc2) : prev.cc2,
+            ex: row.ex !== null ? String(row.ex) : prev.ex,
             notes: prev.notes,
           }
         }
@@ -487,12 +600,23 @@ export default function ClassWorkspaceClient({
       updatedStudentsList.sort((a, b) => a.last_name.localeCompare(b.last_name))
       setStudents(updatedStudentsList)
       setGradeDrafts(nextDrafts)
-      setActiveTab('grades')
+      if (!selectedStudentId && updatedStudentsList[0]) {
+        setSelectedStudentId(updatedStudentsList[0].id)
+      }
       setFeedback(
-        'PV processed: ' + matchedCount + ' row(s) synced (' + importedNewCount + ' newly enrolled). Click Save All Grades to persist.'
+        'Processed sheet "' +
+          parsed.sheetName +
+          '": ' +
+          matchedCount +
+          ' student(s) detected (' +
+          importedNewCount +
+          ' newly added, ' +
+          gradesSyncedCount +
+          ' with grades). Click Save All Grades if grades were imported.'
       )
+      router.refresh()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to parse PV spreadsheet.')
+      setError(err instanceof Error ? err.message : 'Failed to parse spreadsheet.')
     }
   }
 
@@ -542,11 +666,12 @@ export default function ClassWorkspaceClient({
 
   async function handleSaveStudent(e: FormEvent) {
     e.preventDefault()
-    if (!studentCode.trim() || !firstName.trim() || !lastName.trim()) return
+    if (!studentCode.trim() || !firstName.trim()) return
 
     setSavingStudent(true)
     setError(null)
     setFeedback(null)
+    pushSnapshot(editingStudent ? 'Edit student' : 'Add student')
     const supabase = createClient()
 
     try {
@@ -641,6 +766,7 @@ export default function ClassWorkspaceClient({
   async function handleRemoveFromClass(studentId: string) {
     if (!window.confirm(t.removeConfirm)) return
     setError(null)
+    pushSnapshot('Remove student from class')
     const supabase = createClient()
 
     const { error: delErr } = await supabase
@@ -655,6 +781,56 @@ export default function ClassWorkspaceClient({
     }
 
     setStudents((prev) => prev.filter((s) => s.id !== studentId))
+    setSelectedIds((prev) => prev.filter((id) => id !== studentId))
+    router.refresh()
+  }
+
+  async function handleBulkRemoveFromClass() {
+    if (selectedIds.length === 0) return
+    if (!window.confirm(t.bulkRemoveConfirm(selectedIds.length))) return
+    setError(null)
+    pushSnapshot('Bulk remove ' + selectedIds.length + ' student(s)')
+    const supabase = createClient()
+
+    const { error: delErr } = await supabase
+      .from('student_enrollments')
+      .delete()
+      .eq('semi_module_id', classMeta.id)
+      .in('student_id', selectedIds)
+
+    if (delErr) {
+      setError(delErr.message)
+      return
+    }
+
+    const removedSet = new Set(selectedIds)
+    setStudents((prev) => prev.filter((s) => !removedSet.has(s.id)))
+    setSelectedIds([])
+    setFeedback('Removed selected student(s) from this class.')
+    router.refresh()
+  }
+
+  async function handleBulkDeleteStudentsPermanently() {
+    if (selectedIds.length === 0) return
+    if (!window.confirm(t.bulkDeleteConfirm(selectedIds.length))) return
+    setError(null)
+    pushSnapshot('Delete ' + selectedIds.length + ' student record(s)')
+    const supabase = createClient()
+
+    const { error: delErr } = await supabase
+      .from('students')
+      .delete()
+      .in('id', selectedIds)
+
+    if (delErr) {
+      setError(delErr.message)
+      return
+    }
+
+    const deletedSet = new Set(selectedIds)
+    setStudents((prev) => prev.filter((s) => !deletedSet.has(s.id)))
+    setSelectedIds([])
+    setFeedback('Deleted selected student record(s) from database.')
     router.refresh()
   }
 
@@ -677,20 +853,32 @@ export default function ClassWorkspaceClient({
       return
     }
 
+    pushSnapshot('Import CSV ' + file.name)
+
     const firstRow = parseCsvLine(lines[0]).map((h) => h.toLowerCase())
     const hasHeader =
       firstRow.includes('student_code') ||
       firstRow.includes('matricule') ||
       firstRow.includes('code') ||
-      firstRow.includes('first_name')
+      firstRow.includes('first_name') ||
+      firstRow.includes('nom')
 
     const startIndex = hasHeader ? 1 : 0
     const codeIdx = hasHeader
-      ? Math.max(firstRow.indexOf('student_code'), firstRow.indexOf('matricule'), firstRow.indexOf('code'), 0)
+      ? Math.max(
+          firstRow.indexOf('student_code'),
+          firstRow.indexOf('matricule'),
+          firstRow.indexOf('code'),
+          0
+        )
       : 0
     const cneIdx = hasHeader ? firstRow.indexOf('cne') : -1
-    const firstIdx = hasHeader ? Math.max(firstRow.indexOf('first_name'), 1) : 1
-    const lastIdx = hasHeader ? Math.max(firstRow.indexOf('last_name'), 2) : 2
+    const firstIdx = hasHeader
+      ? Math.max(firstRow.indexOf('first_name'), firstRow.indexOf('prenom'), 1)
+      : 1
+    const lastIdx = hasHeader
+      ? Math.max(firstRow.indexOf('last_name'), firstRow.indexOf('nom'), 2)
+      : 2
     const emailIdx = hasHeader ? firstRow.indexOf('email') : 3
 
     const rowsToImport: {
@@ -706,13 +894,15 @@ export default function ClassWorkspaceClient({
 
     for (let i = startIndex; i < lines.length; i++) {
       const cols = parseCsvLine(lines[i])
-      const codeVal = cols[codeIdx]?.trim()
+      const codeVal =
+        cols[codeIdx]?.trim() ||
+        'CSV-' + String(rowsToImport.length + 1).padStart(3, '0')
       const cneVal = cneIdx >= 0 ? cols[cneIdx]?.trim() || null : null
-      const firstVal = cols[firstIdx]?.trim() || 'Placeholder'
-      const lastVal = cols[lastIdx]?.trim() || 'Student ' + i
+      const firstVal = cols[firstIdx]?.trim() || 'Student'
+      const lastVal = cols[lastIdx]?.trim() || ''
       const emailVal = emailIdx >= 0 ? cols[emailIdx]?.trim() || null : null
 
-      if (!codeVal) continue
+      if (!firstVal && !lastVal && !cneVal) continue
 
       rowsToImport.push({
         student_code: codeVal,
@@ -787,6 +977,7 @@ export default function ClassWorkspaceClient({
 
     setSavingAbsence(true)
     setError(null)
+    pushSnapshot('Record absence')
     const supabase = createClient()
 
     try {
@@ -826,6 +1017,7 @@ export default function ClassWorkspaceClient({
   }
 
   async function handleDeleteAbsence(id: string) {
+    pushSnapshot('Delete absence entry')
     const supabase = createClient()
     const { error: delErr } = await supabase.from('student_absences').delete().eq('id', id)
     if (!delErr) {
@@ -864,6 +1056,17 @@ export default function ClassWorkspaceClient({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {historyStack.length > 0 && (
+            <button
+              type="button"
+              onClick={handleUndo}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              <Undo2 className="h-3.5 w-3.5" />
+              {t.undoAction} ({historyStack.length})
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleDownloadTemplate}
@@ -949,12 +1152,46 @@ export default function ClassWorkspaceClient({
 
       {activeTab === 'roster' && (
         <div className="space-y-3">
-          <p className="text-xs text-slate-500 dark:text-slate-400">{t.csvHint}</p>
+          <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t.csvHint}</p>
+
+            {selectedIds.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  {selectedIds.length} selected
+                </span>
+                <button
+                  type="button"
+                  onClick={handleBulkRemoveFromClass}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
+                >
+                  {t.removeSelected}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDeleteStudentsPermanently}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t.deleteSelectedPermanently}
+                </button>
+              </div>
+            )}
+          </div>
 
           <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-900">
             <table className="w-full text-left text-sm">
               <thead className="border-b border-slate-200 bg-slate-50 text-xs font-semibold tracking-wider text-slate-500 uppercase dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400">
                 <tr>
+                  <th className="w-10 px-4 py-3.5">
+                    <input
+                      type="checkbox"
+                      checked={students.length > 0 && selectedIds.length === students.length}
+                      onChange={toggleSelectAll}
+                      aria-label="Select all students"
+                      className="h-4 w-4 cursor-pointer rounded border-slate-300"
+                    />
+                  </th>
                   <th className="px-5 py-3.5">{t.codeCol}</th>
                   <th className="px-5 py-3.5">{t.cneCol}</th>
                   <th className="px-5 py-3.5">{t.nameCol}</th>
@@ -967,8 +1204,21 @@ export default function ClassWorkspaceClient({
                 {students.map((st) => {
                   const absCount = getAbsenceCount(st.id)
                   const overLimit = absCount >= classMeta.max_absences_allowed
+                  const isChecked = selectedIds.includes(st.id)
                   return (
-                    <tr key={st.id} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <tr
+                      key={st.id}
+                      className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
+                    >
+                      <td className="px-4 py-3.5">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleSelectStudent(st.id)}
+                          aria-label={'Select ' + st.first_name + ' ' + st.last_name}
+                          className="h-4 w-4 cursor-pointer rounded border-slate-300"
+                        />
+                      </td>
                       <td className="px-5 py-3.5 font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
                         {st.student_code}
                       </td>
@@ -976,7 +1226,10 @@ export default function ClassWorkspaceClient({
                         {st.cne || '--'}
                       </td>
                       <td className="px-5 py-3.5 font-semibold text-slate-900 dark:text-white">
-                        <Link href={'/students/' + st.id} className="hover:text-blue-600 hover:underline dark:hover:text-blue-400">
+                        <Link
+                          href={'/students/' + st.id}
+                          className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                        >
                           {st.first_name} {st.last_name}
                         </Link>
                       </td>
@@ -1021,7 +1274,10 @@ export default function ClassWorkspaceClient({
 
                 {students.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                    <td
+                      colSpan={7}
+                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
+                    >
                       {t.noStudents}
                     </td>
                   </tr>
@@ -1079,7 +1335,9 @@ export default function ClassWorkspaceClient({
               </label>
               <select
                 value={absenceStatus}
-                onChange={(e) => setAbsenceStatus(e.target.value as 'absent' | 'late' | 'excused')}
+                onChange={(e) =>
+                  setAbsenceStatus(e.target.value as 'absent' | 'late' | 'excused')
+                }
                 className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
               >
                 <option value="absent">{t.statusAbsent}</option>
@@ -1129,7 +1387,9 @@ export default function ClassWorkspaceClient({
                         {rec.session_date}
                       </td>
                       <td className="px-5 py-3.5 font-medium text-slate-900 dark:text-white">
-                        {st ? st.first_name + ' ' + st.last_name + ' (' + st.student_code + ')' : rec.student_id}
+                        {st
+                          ? st.first_name + ' ' + st.last_name + ' (' + st.student_code + ')'
+                          : rec.student_id}
                       </td>
                       <td className="px-5 py-3.5">
                         <span
@@ -1166,7 +1426,10 @@ export default function ClassWorkspaceClient({
 
                 {absences.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                    <td
+                      colSpan={5}
+                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
+                    >
                       {t.noAbsences}
                     </td>
                   </tr>
@@ -1185,7 +1448,9 @@ export default function ClassWorkspaceClient({
               <div className="flex flex-wrap gap-4 text-xs font-semibold text-slate-700 dark:text-slate-300">
                 <span>
                   {t.classAverageLabel}:{' '}
-                  <strong className="text-blue-600 dark:text-blue-400">{classAverage} / 20</strong>
+                  <strong className="text-blue-600 dark:text-blue-400">
+                    {classAverage} / 20
+                  </strong>
                 </span>
                 <span>
                   {t.gradedCountLabel}: {gradedSummaries.length} / {students.length}
@@ -1245,12 +1510,18 @@ export default function ClassWorkspaceClient({
                   const summary = getSummaryForStudent(st.id)
                   const passing = summary.average20 !== null && summary.average20 >= 10
                   return (
-                    <tr key={st.id} className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                    <tr
+                      key={st.id}
+                      className="transition-colors hover:bg-slate-50/80 dark:hover:bg-slate-800/40"
+                    >
                       <td className="px-4 py-3 font-mono text-xs font-semibold text-slate-700 dark:text-slate-300">
                         {st.student_code}
                       </td>
                       <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">
-                        <Link href={'/students/' + st.id} className="hover:text-blue-600 hover:underline dark:hover:text-blue-400">
+                        <Link
+                          href={'/students/' + st.id}
+                          className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
+                        >
                           {st.first_name} {st.last_name}
                         </Link>
                       </td>
@@ -1327,7 +1598,10 @@ export default function ClassWorkspaceClient({
 
                 {students.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+                    <td
+                      colSpan={7}
+                      className="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400"
+                    >
                       {t.noStudents}
                     </td>
                   </tr>
@@ -1401,7 +1675,6 @@ export default function ClassWorkspaceClient({
                   </label>
                   <input
                     type="text"
-                    required
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
                     className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-white"

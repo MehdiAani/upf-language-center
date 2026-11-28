@@ -16,6 +16,9 @@ export interface ParsedPvStudentRow {
   cne: string
   lastName: string
   firstName: string
+  email?: string
+  levelTag?: string
+  groupTag?: string
   cc1: number | null
   cc2: number | null
   ex: number | null
@@ -24,6 +27,7 @@ export interface ParsedPvStudentRow {
 export interface ParsedPvResult {
   metadata: ParsedPvMetadata
   rows: ParsedPvStudentRow[]
+  sheetName: string
 }
 
 export interface ExportPvMetadata {
@@ -56,10 +60,33 @@ function parseScoreCell(raw: unknown): number | null {
     return Math.round(raw * 100) / 100
   }
   const str = String(raw).trim().replace(',', '.')
-  if (!str) return null
+  if (!str || str === '-' || str === '--') return null
   const num = Number(str)
   if (Number.isNaN(num)) return null
   return Math.round(num * 100) / 100
+}
+
+function normalizeHeader(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+}
+
+function splitCombinedName(fullName: string): { firstName: string; lastName: string } {
+  const parts = fullName.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) {
+    return { firstName: 'Student', lastName: 'Unknown' }
+  }
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: '' }
+  }
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(' '),
+  }
 }
 
 function extractBetween(text: string, startLabel: string, endLabel?: string): string {
@@ -79,11 +106,19 @@ function extractBetween(text: string, startLabel: string, endLabel?: string): st
   return text.slice(sliceStart, endIdx).trim()
 }
 
+function pickBestSheet(workbook: XLSX.WorkBook): string {
+  const preferred = workbook.SheetNames.find((name) => {
+    const n = normalizeHeader(name)
+    return n.includes('resultat') || n.includes('roster') || n.includes('liste') || n.includes('pv')
+  })
+  return preferred || workbook.SheetNames[0]
+}
+
 export async function parsePvSpreadsheet(file: File): Promise<ParsedPvResult> {
   const buffer = await file.arrayBuffer()
   const workbook = XLSX.read(buffer, { type: 'array' })
-  const firstSheetName = workbook.SheetNames[0]
-  const sheet = workbook.Sheets[firstSheetName]
+  const sheetName = pickBestSheet(workbook)
+  const sheet = workbook.Sheets[sheetName]
 
   const matrix = XLSX.utils.sheet_to_json<unknown[]>(sheet, {
     header: 1,
@@ -102,49 +137,64 @@ export async function parsePvSpreadsheet(file: File): Promise<ParsedPvResult> {
     matiere: '',
   }
 
-  // Locate the header row containing Matricule / CNE / Nom
   let headerRowIdx = -1
   let colMap = {
-    matricule: 0,
-    cne: 1,
-    nom: 2,
-    prenom: 3,
-    cc1: 4,
-    cc2: 5,
-    ex: 6,
+    matricule: -1,
+    cne: -1,
+    nom: -1,
+    prenom: -1,
+    fullName: -1,
+    email: -1,
+    niveau: -1,
+    groupe: -1,
+    cc1: -1,
+    cc2: -1,
+    ex: -1,
   }
 
-  for (let r = 0; r < matrix.length; r++) {
+  for (let r = 0; r < Math.min(matrix.length, 20); r++) {
     const row = matrix[r] ?? []
-    const normalized = row.map((cell) =>
-      String(cell ?? '')
-        .trim()
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-    )
+    const normalized = row.map(normalizeHeader)
 
-    const hasNom = normalized.some((c) => c === 'nom' || c.startsWith('nom '))
-    const hasMatriculeOrCne = normalized.some(
-      (c) => c.includes('matricule') || c === 'cne'
+    const foundMatricule = normalized.findIndex((c) => c.includes('matricule') || c.includes('student_code') || c === 'code')
+    const foundCne = normalized.findIndex((c) => c === 'cne')
+    const foundFullName = normalized.findIndex(
+      (c) =>
+        c.includes('nom et prenom') ||
+        c.includes('prenom et nom') ||
+        c === 'full name' ||
+        c === 'student name' ||
+        c === 'etudiant'
     )
+    const foundNom = normalized.findIndex((c) => c === 'nom' || c.startsWith('nom ') || c === 'last_name')
+    const foundPrenom = normalized.findIndex((c) => c.includes('prenom') || c === 'first_name')
+    const foundEmail = normalized.findIndex((c) => c.includes('email') || c.includes('courriel'))
+    const foundNiveau = normalized.findIndex((c) => c === 'niveau' || c === 'level')
+    const foundGroupe = normalized.findIndex((c) => c === 'groupe' || c === 'group')
+    const foundCc1 = normalized.findIndex((c) => c === 'cc1' || c === 'cc 1' || c === 'midterm')
+    const foundCc2 = normalized.findIndex((c) => c === 'cc2' || c === 'cc 2' || c === 'post_midterm')
+    const foundEx = normalized.findIndex((c) => c === 'ex' || c.includes('examen') || c === 'final_exam')
 
-    if (hasNom && hasMatriculeOrCne) {
+    const hasNameColumn = foundFullName !== -1 || foundNom !== -1 || foundPrenom !== -1
+    if (hasNameColumn) {
       headerRowIdx = r
-      normalized.forEach((cell, idx) => {
-        if (cell.includes('matricule')) colMap.matricule = idx
-        else if (cell === 'cne') colMap.cne = idx
-        else if (cell === 'nom' || cell.startsWith('nom')) colMap.nom = idx
-        else if (cell.includes('prenom')) colMap.prenom = idx
-        else if (cell === 'cc1' || cell === 'cc 1') colMap.cc1 = idx
-        else if (cell === 'cc2' || cell === 'cc 2') colMap.cc2 = idx
-        else if (cell === 'ex' || cell.includes('examen')) colMap.ex = idx
-      })
+      colMap = {
+        matricule: foundMatricule,
+        cne: foundCne,
+        nom: foundNom,
+        prenom: foundPrenom,
+        fullName: foundFullName,
+        email: foundEmail,
+        niveau: foundNiveau,
+        groupe: foundGroupe,
+        cc1: foundCc1,
+        cc2: foundCc2,
+        ex: foundEx,
+      }
       break
     }
   }
 
-  // Parse metadata lines above headerRowIdx
   const metaLimit = headerRowIdx === -1 ? Math.min(matrix.length, 8) : headerRowIdx
   for (let r = 0; r < metaLimit; r++) {
     const line = (matrix[r] ?? [])
@@ -154,46 +204,76 @@ export async function parsePvSpreadsheet(file: File): Promise<ParsedPvResult> {
     if (!line) continue
 
     const lower = line.toLowerCase()
-    if (lower.includes('année universitaire') || lower.includes('annee universitaire')) {
+    if (lower.includes('annee universitaire') || lower.includes('universitaire')) {
       metadata.academicYear = extractBetween(line, 'Universitaire', 'Session')
       metadata.session = extractBetween(line, 'Session')
-    } else if (lower.includes('filière') || lower.includes('filiere')) {
-      metadata.filiere = extractBetween(line, 'Fili', 'Groupe')
+    } else if (lower.includes('filiere')) {
+      metadata.filiere = extractBetween(line, 'Filiere', 'Groupe')
       metadata.groupe = extractBetween(line, 'Groupe')
     } else if (lower.includes('niveau')) {
       metadata.niveau = extractBetween(line, 'Niveau', 'Semestre')
       metadata.semestre = extractBetween(line, 'Semestre')
     } else if (lower.includes('option')) {
       metadata.option = extractBetween(line, 'Option') || 'NA'
-    } else if (lower.includes('matière') || lower.includes('matiere')) {
-      metadata.matiere = extractBetween(line, 'Mati')
+    } else if (lower.includes('matiere')) {
+      metadata.matiere = extractBetween(line, 'Matiere')
     }
   }
 
   const rows: ParsedPvStudentRow[] = []
-  const startRow = headerRowIdx === -1 ? 1 : headerRowIdx + 1
+  const startRow = headerRowIdx === -1 ? 0 : headerRowIdx + 1
 
   for (let r = startRow; r < matrix.length; r++) {
     const row = matrix[r] ?? []
-    const matricule = String(row[colMap.matricule] ?? '').trim()
-    const cne = String(row[colMap.cne] ?? '').trim()
-    const lastName = String(row[colMap.nom] ?? '').trim()
-    const firstName = String(row[colMap.prenom] ?? '').trim()
+    const rawMatricule =
+      colMap.matricule >= 0 ? String(row[colMap.matricule] ?? '').trim() : ''
+    const rawCne = colMap.cne >= 0 ? String(row[colMap.cne] ?? '').trim() : ''
+    const rawFullName =
+      colMap.fullName >= 0 ? String(row[colMap.fullName] ?? '').trim() : ''
+    const rawNom = colMap.nom >= 0 ? String(row[colMap.nom] ?? '').trim() : ''
+    const rawPrenom =
+      colMap.prenom >= 0 ? String(row[colMap.prenom] ?? '').trim() : ''
+    const rawEmail =
+      colMap.email >= 0 ? String(row[colMap.email] ?? '').trim() : ''
+    const rawNiveau =
+      colMap.niveau >= 0 ? String(row[colMap.niveau] ?? '').trim() : ''
+    const rawGroupe =
+      colMap.groupe >= 0 ? String(row[colMap.groupe] ?? '').trim() : ''
 
-    if (!matricule && !cne && !lastName && !firstName) continue
+    let firstName = rawPrenom
+    let lastName = rawNom
+
+    if (rawFullName) {
+      const split = splitCombinedName(rawFullName)
+      if (!firstName) firstName = split.firstName
+      if (!lastName) lastName = split.lastName
+    }
+
+    const cleanEmail = rawEmail && rawEmail !== '-' ? rawEmail : ''
+    if (!rawMatricule && !rawCne && !firstName && !lastName && !cleanEmail) {
+      continue
+    }
+
+    const generatedCode =
+      rawMatricule ||
+      rawCne ||
+      'STU-' + String(rows.length + 1).padStart(3, '0')
 
     rows.push({
-      matricule,
-      cne,
-      lastName,
-      firstName,
-      cc1: parseScoreCell(row[colMap.cc1]),
-      cc2: parseScoreCell(row[colMap.cc2]),
-      ex: parseScoreCell(row[colMap.ex]),
+      matricule: generatedCode,
+      cne: rawCne,
+      firstName: firstName || 'Student',
+      lastName: lastName || '',
+      email: cleanEmail,
+      levelTag: rawNiveau,
+      groupTag: rawGroupe,
+      cc1: colMap.cc1 >= 0 ? parseScoreCell(row[colMap.cc1]) : null,
+      cc2: colMap.cc2 >= 0 ? parseScoreCell(row[colMap.cc2]) : null,
+      ex: colMap.ex >= 0 ? parseScoreCell(row[colMap.ex]) : null,
     })
   }
 
-  return { metadata, rows }
+  return { metadata, rows, sheetName }
 }
 
 export interface ComputedGradeSummary {
@@ -257,13 +337,13 @@ export function exportPvSpreadsheet(
   students: ExportPvStudentRow[]
 ) {
   const aoa: (string | number | null)[][] = [
-    ['', '', `Année Universitaire : ${meta.academicYear}   Session :  ${meta.session}`],
-    ['', '', `Filière             : ${meta.filiere}   Groupe   : ${meta.groupe}`],
-    ['', '', `Niveau              : ${meta.niveau}    Semestre   : ${meta.semestre}`],
-    ['', '', `Option              : ${meta.option || 'NA'}`],
-    ['', '', `Matière  : ${meta.matiere}`],
+    ['', '', 'Annee Universitaire : ' + meta.academicYear + '   Session :  ' + meta.session],
+    ['', '', 'Filiere             : ' + meta.filiere + '   Groupe   : ' + meta.groupe],
+    ['', '', 'Niveau              : ' + meta.niveau + '    Semestre   : ' + meta.semestre],
+    ['', '', 'Option              : ' + (meta.option || 'NA')],
+    ['', '', 'Matiere  : ' + meta.matiere],
     [],
-    ['Matricule ', 'CNE', 'Nom    ', 'Prénom    ', 'CC1', 'CC2', 'EX'],
+    ['Matricule ', 'CNE', 'Nom    ', 'Prenom    ', 'CC1', 'CC2', 'EX'],
   ]
 
   for (const st of students) {
@@ -281,13 +361,13 @@ export function exportPvSpreadsheet(
   const worksheet = XLSX.utils.aoa_to_sheet(aoa)
 
   worksheet['!cols'] = [
-    { wch: 16 }, // Matricule
-    { wch: 14 }, // CNE
-    { wch: 18 }, // Nom
-    { wch: 18 }, // Prénom
-    { wch: 8 },  // CC1
-    { wch: 8 },  // CC2
-    { wch: 8 },  // EX
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 8 },
+    { wch: 8 },
+    { wch: 8 },
   ]
 
   const workbook = XLSX.utils.book_new()
@@ -302,6 +382,6 @@ export function exportPvSpreadsheet(
     .replace(/[^A-Z0-9]/g, '')
   const safeSem = String(meta.semestre || '1').replace(/[^0-9]/g, '') || '1'
 
-  const filename = `${safeProf}_${safeCode}_${safeSem}.xlsx`
+  const filename = safeProf + '_' + safeCode + '_' + safeSem + '.xlsx'
   XLSX.writeFile(workbook, filename)
 }
