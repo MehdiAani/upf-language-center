@@ -112,11 +112,11 @@ const COPY = {
     importPv: 'Import PV / Roster (.xls/.xlsx)',
     exportPv: 'Export Official PV',
     downloadTemplate: 'CSV Template',
-    undoAction: 'Undo',
-    removeSelected: 'Remove Selected',
+    undoAction: 'Undo (Ctrl+Z)',
+    removeSelected: 'Remove from Class',
     deleteSelectedPermanently: 'Delete Selected Students',
     csvHint:
-      'Supports PV files (.xls/.xlsx), placement/roster sheets with Nom et Prenom or Nom + Prenom, and CSV files even when grades are not included.',
+      'Supports PV files (.xls/.xlsx), roster/placement sheets with Nom et Prenom or Nom + Prenom, and CSV files even without grades.',
     tabRoster: 'Student Roster',
     tabAbsences: 'Absence Tracker',
     tabGrades: 'Gradebook (CC1 / CC2 / EX)',
@@ -129,8 +129,8 @@ const COPY = {
     noStudents: 'No students enrolled yet.',
     studentCodeLabel: 'Matricule / Student Code',
     cneLabel: 'CNE (Optional)',
-    firstNameLabel: 'First Name',
-    lastNameLabel: 'Last Name',
+    firstNameLabel: 'First / Full Name',
+    lastNameLabel: 'Last Name (Optional)',
     emailLabel: 'Email (Optional)',
     cancel: 'Cancel',
     save: 'Save Student',
@@ -141,7 +141,7 @@ const COPY = {
     bulkDeleteConfirm: (n: number) =>
       'Permanently delete ' +
       n +
-      ' selected student record(s) from the system so they no longer appear in search?',
+      ' selected student record(s) from the database so they no longer show up in search?',
     sessionDateLabel: 'Session Date',
     statusLabel: 'Status',
     reasonLabel: 'Note / Reason (Optional)',
@@ -173,7 +173,7 @@ const COPY = {
     exportPv: 'Exporter PV Officiel',
     downloadTemplate: 'Modele CSV',
     undoAction: 'Annuler (Ctrl+Z)',
-    removeSelected: 'Retirer selection',
+    removeSelected: 'Retirer de la classe',
     deleteSelectedPermanently: 'Supprimer etudiants selectionnes',
     csvHint:
       'Prend en charge les PV (.xls/.xlsx), les listes ou tests de placement avec Nom et Prenom ou Nom + Prenom, et les CSV meme sans notes.',
@@ -189,8 +189,8 @@ const COPY = {
     noStudents: 'Aucun etudiant inscrit pour le moment.',
     studentCodeLabel: 'Matricule / Code etudiant',
     cneLabel: 'CNE (Optionnel)',
-    firstNameLabel: 'Prenom',
-    lastNameLabel: 'Nom',
+    firstNameLabel: 'Prenom / Nom complet',
+    lastNameLabel: 'Nom (Optionnel)',
     emailLabel: 'E-mail (Optionnel)',
     cancel: 'Annuler',
     save: 'Enregistrer',
@@ -226,6 +226,17 @@ const COPY = {
   },
 } as const
 
+function formatDisplayName(st: StudentItem): string {
+  const f = (st.first_name ?? '').trim().replace(/\s+/g, ' ')
+  const l = (st.last_name ?? '').trim().replace(/\s+/g, ' ')
+  if (!l) return f
+  if (!f) return l
+  if (f.toLowerCase() === l.toLowerCase()) return f
+  if (f.toLowerCase().includes(l.toLowerCase())) return f
+  if (l.toLowerCase().includes(f.toLowerCase())) return l
+  return f + ' ' + l
+}
+
 function parseCsvLine(line: string): string[] {
   const result: string[] = []
   let current = ''
@@ -254,7 +265,7 @@ function parseScore(raw: string): number | null {
 }
 
 function normalizeNameKey(lastName: string, firstName: string): string {
-  return (lastName + ' ' + firstName)
+  return (firstName + ' ' + lastName)
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -284,6 +295,7 @@ export default function ClassWorkspaceClient({
   const [absences, setAbsences] = useState<AbsenceRecord[]>(initialAbsences)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [historyStack, setHistoryStack] = useState<WorkspaceSnapshot[]>([])
+  const [reverting, setReverting] = useState(false)
 
   const [gradeDrafts, setGradeDrafts] = useState<Record<string, GradeDraft>>(() => {
     const map: Record<string, GradeDraft> = {}
@@ -329,23 +341,75 @@ export default function ClassWorkspaceClient({
       ...prev.slice(-19),
       {
         label,
-        students: [...students],
-        absences: [...absences],
-        gradeDrafts: { ...gradeDrafts },
+        students: students.map((s) => ({ ...s })),
+        absences: absences.map((a) => ({ ...a })),
+        gradeDrafts: Object.fromEntries(
+          Object.entries(gradeDrafts).map(([k, v]) => [k, { ...v }])
+        ),
       },
     ])
   }
 
-  function handleUndo() {
-    if (historyStack.length === 0) return
-    const last = historyStack[historyStack.length - 1]
-    setHistoryStack((prev) => prev.slice(0, -1))
-    setStudents(last.students)
-    setAbsences(last.absences)
-    setGradeDrafts(last.gradeDrafts)
-    setSelectedIds([])
+  async function handleUndo() {
+    if (historyStack.length === 0 || reverting) return
+    setReverting(true)
     setError(null)
-    setFeedback('Reverted: ' + last.label)
+    setFeedback(null)
+
+    const last = historyStack[historyStack.length - 1]
+    const supabase = createClient()
+
+    try {
+      // Restore student records and enrollments in Supabase
+      if (last.students.length > 0) {
+        const studentRows = last.students.map((s) => ({
+          id: s.id,
+          student_code: s.student_code,
+          cne: s.cne ?? null,
+          first_name: s.first_name,
+          last_name: s.last_name,
+          email: s.email ?? null,
+          home_department_id: s.home_department_id ?? (classMeta.department_id || null),
+          cohort_level: s.cohort_level ?? String(classMeta.year_level),
+          is_active: s.is_active ?? true,
+        }))
+
+        await supabase.from('students').upsert(studentRows, { onConflict: 'id' })
+      }
+
+      const prevIds = new Set(last.students.map((s) => s.id))
+      const removedIds = students.map((s) => s.id).filter((id) => !prevIds.has(id))
+
+      if (removedIds.length > 0) {
+        await supabase
+          .from('student_enrollments')
+          .delete()
+          .eq('semi_module_id', classMeta.id)
+          .in('student_id', removedIds)
+      }
+
+      if (last.students.length > 0) {
+        await supabase
+          .from('student_enrollments')
+          .upsert(
+            last.students.map((s) => ({
+              semi_module_id: classMeta.id,
+              student_id: s.id,
+            })),
+            { onConflict: 'semi_module_id,student_id' }
+          )
+      }
+
+      setHistoryStack((prev) => prev.slice(0, -1))
+      setStudents(last.students)
+      setAbsences(last.absences)
+      setGradeDrafts(last.gradeDrafts)
+      setSelectedIds([])
+      setFeedback('Reverted: ' + last.label)
+      router.refresh()
+    } finally {
+      setReverting(false)
+    }
   }
 
   useEffect(() => {
@@ -356,7 +420,7 @@ export default function ClassWorkspaceClient({
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !isEditingText) {
         if (historyStack.length > 0) {
           e.preventDefault()
-          handleUndo()
+          void handleUndo()
         }
       }
     }
@@ -545,9 +609,7 @@ export default function ClassWorkspaceClient({
           const uniqueCode =
             row.matricule ||
             row.cne ||
-            'UPF-' +
-              (classMeta.department_code || 'STU') +
-              '-' +
+            'STU-' +
               String(updatedStudentsList.length + importedNewCount + 1).padStart(3, '0')
 
           const { data: upsertedSt, error: stErr } = await supabase
@@ -597,7 +659,9 @@ export default function ClassWorkspaceClient({
         }
       }
 
-      updatedStudentsList.sort((a, b) => a.last_name.localeCompare(b.last_name))
+      updatedStudentsList.sort((a, b) =>
+        formatDisplayName(a).localeCompare(formatDisplayName(b))
+      )
       setStudents(updatedStudentsList)
       setGradeDrafts(nextDrafts)
       if (!selectedStudentId && updatedStudentsList[0]) {
@@ -703,7 +767,7 @@ export default function ClassWorkspaceClient({
         setStudents((prev) =>
           prev
             .map((s) => (s.id === editingStudent.id ? (updated as StudentItem) : s))
-            .sort((a, b) => a.last_name.localeCompare(b.last_name))
+            .sort((a, b) => formatDisplayName(a).localeCompare(formatDisplayName(b)))
         )
       } else {
         const { data: upserted, error: stErr } = await supabase
@@ -744,7 +808,7 @@ export default function ClassWorkspaceClient({
         setStudents((prev) => {
           const filtered = prev.filter((s) => s.id !== upserted.id)
           return [...filtered, upserted as StudentItem].sort((a, b) =>
-            a.last_name.localeCompare(b.last_name)
+            formatDisplayName(a).localeCompare(formatDisplayName(b))
           )
         })
         setGradeDrafts((prev) => ({
@@ -789,7 +853,7 @@ export default function ClassWorkspaceClient({
     if (selectedIds.length === 0) return
     if (!window.confirm(t.bulkRemoveConfirm(selectedIds.length))) return
     setError(null)
-    pushSnapshot('Bulk remove ' + selectedIds.length + ' student(s)')
+    pushSnapshot('Remove ' + selectedIds.length + ' student(s) from class')
     const supabase = createClient()
 
     const { error: delErr } = await supabase
@@ -950,7 +1014,9 @@ export default function ClassWorkspaceClient({
       const map = new Map<string, StudentItem>()
       for (const s of prev) map.set(s.id, s)
       for (const s of upsertedStudents as StudentItem[]) map.set(s.id, s)
-      return Array.from(map.values()).sort((a, b) => a.last_name.localeCompare(b.last_name))
+      return Array.from(map.values()).sort((a, b) =>
+        formatDisplayName(a).localeCompare(formatDisplayName(b))
+      )
     })
 
     setGradeDrafts((prev) => {
@@ -1059,11 +1125,12 @@ export default function ClassWorkspaceClient({
           {historyStack.length > 0 && (
             <button
               type="button"
-              onClick={handleUndo}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+              disabled={reverting}
+              onClick={() => void handleUndo()}
+              className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               <Undo2 className="h-3.5 w-3.5" />
-              {t.undoAction} ({historyStack.length})
+              {reverting ? 'Reverting...' : t.undoAction + ' (' + historyStack.length + ')'}
             </button>
           )}
 
@@ -1162,14 +1229,14 @@ export default function ClassWorkspaceClient({
                 </span>
                 <button
                   type="button"
-                  onClick={handleBulkRemoveFromClass}
+                  onClick={() => void handleBulkRemoveFromClass()}
                   className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-950/60 dark:text-amber-200"
                 >
                   {t.removeSelected}
                 </button>
                 <button
                   type="button"
-                  onClick={handleBulkDeleteStudentsPermanently}
+                  onClick={() => void handleBulkDeleteStudentsPermanently()}
                   className="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 dark:border-red-800 dark:bg-red-950/60 dark:text-red-300"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
@@ -1205,6 +1272,7 @@ export default function ClassWorkspaceClient({
                   const absCount = getAbsenceCount(st.id)
                   const overLimit = absCount >= classMeta.max_absences_allowed
                   const isChecked = selectedIds.includes(st.id)
+                  const displayName = formatDisplayName(st)
                   return (
                     <tr
                       key={st.id}
@@ -1215,7 +1283,7 @@ export default function ClassWorkspaceClient({
                           type="checkbox"
                           checked={isChecked}
                           onChange={() => toggleSelectStudent(st.id)}
-                          aria-label={'Select ' + st.first_name + ' ' + st.last_name}
+                          aria-label={'Select ' + displayName}
                           className="h-4 w-4 cursor-pointer rounded border-slate-300"
                         />
                       </td>
@@ -1230,7 +1298,7 @@ export default function ClassWorkspaceClient({
                           href={'/students/' + st.id}
                           className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                         >
-                          {st.first_name} {st.last_name}
+                          {displayName}
                         </Link>
                       </td>
                       <td className="px-5 py-3.5 text-slate-500 dark:text-slate-400">
@@ -1261,7 +1329,7 @@ export default function ClassWorkspaceClient({
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleRemoveFromClass(st.id)}
+                            onClick={() => void handleRemoveFromClass(st.id)}
                             className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/50 dark:hover:text-red-400"
                           >
                             <Trash2 className="h-4 w-4" />
@@ -1310,7 +1378,7 @@ export default function ClassWorkspaceClient({
               >
                 {students.map((st) => (
                   <option key={st.id} value={st.id}>
-                    {st.student_code} - {st.first_name} {st.last_name}
+                    {st.student_code} - {formatDisplayName(st)}
                   </option>
                 ))}
               </select>
@@ -1388,7 +1456,7 @@ export default function ClassWorkspaceClient({
                       </td>
                       <td className="px-5 py-3.5 font-medium text-slate-900 dark:text-white">
                         {st
-                          ? st.first_name + ' ' + st.last_name + ' (' + st.student_code + ')'
+                          ? formatDisplayName(st) + ' (' + st.student_code + ')'
                           : rec.student_id}
                       </td>
                       <td className="px-5 py-3.5">
@@ -1414,7 +1482,7 @@ export default function ClassWorkspaceClient({
                       <td className="px-5 py-3.5">
                         <button
                           type="button"
-                          onClick={() => handleDeleteAbsence(rec.id)}
+                          onClick={() => void handleDeleteAbsence(rec.id)}
                           className="cursor-pointer rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/50 dark:hover:text-red-400"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1481,7 +1549,7 @@ export default function ClassWorkspaceClient({
 
               <button
                 type="button"
-                onClick={handleSaveAllGrades}
+                onClick={() => void handleSaveAllGrades()}
                 disabled={savingGrades || students.length === 0}
                 className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
               >
@@ -1522,7 +1590,7 @@ export default function ClassWorkspaceClient({
                           href={'/students/' + st.id}
                           className="hover:text-blue-600 hover:underline dark:hover:text-blue-400"
                         >
-                          {st.first_name} {st.last_name}
+                          {formatDisplayName(st)}
                         </Link>
                       </td>
                       <td className="px-4 py-3">
