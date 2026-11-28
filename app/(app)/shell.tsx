@@ -17,6 +17,7 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { ThemeToggle } from '@/app/theme-toggle'
 import { UpfLogo } from '@/components/upf-logo'
+import { GlobalStudentSearch } from '@/components/global-student-search'
 import type { SemesterOption } from './layout'
 
 interface Profile {
@@ -45,7 +46,7 @@ const COPY = {
     manageUsers: 'Users & Roles',
     semester: 'Semester',
     noSemesters: 'No semesters',
-    switchLang: 'Français',
+    switchLang: 'Francais',
     signOut: 'Sign out',
     roles: {
       admin: 'Admin',
@@ -59,15 +60,15 @@ const COPY = {
     dashboard: 'Tableau de bord',
     schedules: 'Emplois du temps profs',
     adminSection: 'Administration',
-    manageDepartments: 'Départements & Semestres',
-    manageUsers: 'Utilisateurs & Rôles',
+    manageDepartments: 'Departements & Semestres',
+    manageUsers: 'Utilisateurs & Roles',
     semester: 'Semestre',
     noSemesters: 'Aucun semestre',
     switchLang: 'English',
-    signOut: 'Déconnexion',
+    signOut: 'Deconnexion',
     roles: {
       admin: 'Administrateur',
-      dept_head: 'Chef de dép.',
+      dept_head: 'Chef de dep.',
       professor: 'Professeur',
       pending: 'En attente',
     },
@@ -90,6 +91,10 @@ export default function DashboardShell({
   const [selectedSemester, setSelectedSemester] = useState(currentSemesterId)
 
   const isAdmin = profile.role === 'admin'
+  const canSearchStudents =
+    profile.role === 'admin' ||
+    profile.role === 'dept_head' ||
+    profile.role === 'professor'
 
   async function handleToggleLocale() {
     const nextLocale = locale === 'en' ? 'fr' : 'en'
@@ -214,8 +219,8 @@ export default function DashboardShell({
       </aside>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <header className="z-10 flex h-16 items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 transition-colors dark:border-slate-800 dark:bg-slate-900 md:px-6">
-          <div className="flex items-center gap-3">
+        <header className="z-10 flex h-16 items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 transition-colors dark:border-slate-800 dark:bg-slate-900 md:px-6">
+          <div className="flex flex-1 items-center gap-3">
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
@@ -225,10 +230,10 @@ export default function DashboardShell({
               <Menu className="h-5 w-5" />
             </button>
 
-            <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 lg:flex">
               <label
                 htmlFor="semester-select"
-                className="hidden text-xs font-medium text-slate-500 dark:text-slate-400 sm:inline"
+                className="text-xs font-medium text-slate-500 dark:text-slate-400"
               >
                 {t.semester}
               </label>
@@ -250,9 +255,11 @@ export default function DashboardShell({
                 )}
               </select>
             </div>
+
+            {canSearchStudents && <GlobalStudentSearch locale={locale} />}
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex shrink-0 items-center gap-2.5">
             <button
               type="button"
               onClick={handleToggleLocale}
