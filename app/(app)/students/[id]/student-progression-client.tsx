@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -14,10 +15,12 @@ import {
   TrendingUp,
   UserCheck,
 } from 'lucide-react'
+import { computeWeightedAverage } from '@/lib/pv-excel'
 
 export interface StudentProfileMeta {
   id: string
   student_code: string
+  cne?: string | null
   first_name: string
   last_name: string
   email: string | null
@@ -49,9 +52,12 @@ export interface StudentCourseHistory {
   semester_label_fr: string
   academic_year: string
   term_number: number
-  midterm: number | null
-  post_midterm: number | null
-  final_exam: number | null
+  cc1: number | null
+  cc2: number | null
+  ex: number | null
+  weight_cc1?: number
+  weight_cc2?: number
+  weight_ex?: number
   notes: string | null
   unexcused_absences: number
 }
@@ -79,16 +85,18 @@ const COPY = {
     back: 'Back to Previous Page',
     activeBadge: 'Active Student',
     inactiveBadge: 'Inactive',
-    yearLabel: (y: string | null) => (y ? `Year ${y}` : 'Year N/A'),
+    yearLabel: (y: string | null) => (y ? 'Year ' + y : 'Year N/A'),
     kpiOverallAvg: 'Overall Average',
     kpiEnglishAvg: 'English Average',
     kpiFrenchAvg: 'French Average',
     kpiTotalAbsences: 'Unexcused Absences',
-    chartTitle: 'Academic Progression Across Evaluations & Semesters',
+    chartTitle: 'Longitudinal Progression Across Semesters & Years',
     chartSubtitle:
-      'Tracks Midterm, Post-Midterm, and Final Exam progression (/20) in English and French.',
+      'Tracks CC1, CC2, EX, and computed averages (/20 and %) in English and French over time.',
+    modeCheckpoints: 'Evaluations (CC1 / CC2 / EX)',
+    modeAverages: 'Course Averages (/20)',
     noChartData:
-      'No grades recorded yet. Once evaluation scores are entered, the progression chart will appear here automatically.',
+      'No grades recorded yet. Once CC1, CC2, or EX scores are entered, the progression chart updates automatically.',
     englishLegend: 'English',
     frenchLegend: 'French',
     coursesSectionTitle: 'Enrolled Courses, Schedule & Grade History',
@@ -96,10 +104,10 @@ const COPY = {
     unassignedProf: 'Unassigned',
     roomTbd: 'Room TBD',
     scheduleTbd: 'Schedule TBD',
-    midterm: 'Midterm',
-    postMidterm: 'Post-Midterm',
-    finalExam: 'Final Exam',
-    average: 'Average',
+    cc1Label: 'CC1',
+    cc2Label: 'CC2',
+    exLabel: 'EX',
+    averageLabel: 'Average',
     openClass: 'Open Class',
     absencesSectionTitle: 'Absence & Attendance Log',
     noAbsences: 'No absences recorded for this student.',
@@ -112,35 +120,37 @@ const COPY = {
     statusLate: 'Late',
     statusExcused: 'Excused',
     fullModuleBadge: 'Full Module (16w)',
-    semiBlock1Badge: 'Semi-Module (Weeks 1–8)',
-    semiBlock2Badge: 'Semi-Module (Weeks 9–16)',
+    semiBlock1Badge: 'Semi-Module (Weeks 1 to 8)',
+    semiBlock2Badge: 'Semi-Module (Weeks 9 to 16)',
   },
   fr: {
     back: 'Retour a la page precedente',
     activeBadge: 'Etudiant actif',
     inactiveBadge: 'Inactif',
     yearLabel: (y: string | null) =>
-      y ? (y === '1' ? '1ere Annee' : `${y}eme Annee`) : 'Annee N/D',
+      y ? (y === '1' ? '1ere Annee' : y + 'eme Annee') : 'Annee N/D',
     kpiOverallAvg: 'Moyenne Generale',
     kpiEnglishAvg: 'Moyenne Anglais',
     kpiFrenchAvg: 'Moyenne Francais',
     kpiTotalAbsences: 'Absences non justifiees',
-    chartTitle: 'Progression Academique par Evaluation & Semestre',
+    chartTitle: 'Progression Longitudinale par Semestre & Annee',
     chartSubtitle:
-      'Suivi des notes (/20) au Midterm, Post-Midterm et Examen Final en Anglais et Francais.',
+      'Suivi de CC1, CC2, EX et des moyennes calculees (/20 et %) en Anglais et Francais.',
+    modeCheckpoints: 'Evaluations (CC1 / CC2 / EX)',
+    modeAverages: 'Moyennes de cours (/20)',
     noChartData:
-      'Aucune note enregistree. Le graphique apparaitra automatiquement des la saisie des evaluations.',
+      'Aucune note enregistree. Le graphique apparaitra automatiquement des la saisie de CC1, CC2 ou EX.',
     englishLegend: 'Anglais',
     frenchLegend: 'Francais',
     coursesSectionTitle: 'Cours inscrits, Emploi du temps & Historique des notes',
-    noCourses: 'Cet etudiant n’est inscrit a aucun cours de langue pour le moment.',
+    noCourses: "Cet etudiant n'est inscrit a aucun cours de langue pour le moment.",
     unassignedProf: 'Non assigne',
     roomTbd: 'Salle a definir',
     scheduleTbd: 'Horaire a definir',
-    midterm: 'Midterm',
-    postMidterm: 'Post-Midterm',
-    finalExam: 'Examen Final',
-    average: 'Moyenne',
+    cc1Label: 'CC1',
+    cc2Label: 'CC2',
+    exLabel: 'EX',
+    averageLabel: 'Moyenne',
     openClass: 'Ouvrir le cours',
     absencesSectionTitle: 'Historique des absences',
     noAbsences: 'Aucune absence enregistree pour cet etudiant.',
@@ -153,17 +163,24 @@ const COPY = {
     statusLate: 'En retard',
     statusExcused: 'Justifie',
     fullModuleBadge: 'Module Complet (16 sem.)',
-    semiBlock1Badge: 'Semi-Module (Sem. 1–8)',
-    semiBlock2Badge: 'Semi-Module (Sem. 9–16)',
+    semiBlock1Badge: 'Semi-Module (Sem. 1 a 8)',
+    semiBlock2Badge: 'Semi-Module (Sem. 9 a 16)',
   },
 } as const
 
-function computeCourseAvg(c: StudentCourseHistory): number | null {
-  const vals = [c.midterm, c.post_midterm, c.final_exam].filter(
-    (v): v is number => v !== null && v !== undefined
-  )
-  if (vals.length === 0) return null
-  return vals.reduce((acc, v) => acc + Number(v), 0) / vals.length
+function getCourseSummary(c: StudentCourseHistory) {
+  return computeWeightedAverage(c.cc1, c.cc2, c.ex, {
+    cc1: c.weight_cc1 ?? 25,
+    cc2: c.weight_cc2 ?? 25,
+    ex: c.weight_ex ?? 50,
+  })
+}
+
+function formatAvgWithPct(values: number[]): { avgText: string; pctText: string } {
+  if (values.length === 0) return { avgText: '--', pctText: '' }
+  const avg = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 100) / 100
+  const pct = Math.round((avg / 20) * 1000) / 10
+  return { avgText: avg.toFixed(2), pctText: pct.toFixed(1) + '%' }
 }
 
 interface ChartPoint {
@@ -180,50 +197,49 @@ export default function StudentProgressionClient({
   const router = useRouter()
   const t = COPY[locale]
 
+  const [chartMode, setChartMode] = useState<'checkpoints' | 'averages'>('checkpoints')
+
   const deptName =
     locale === 'fr' ? student.department_name_fr : student.department_name_en
 
   const englishCourses = courses.filter((c) => c.subject === 'english')
   const frenchCourses = courses.filter((c) => c.subject === 'french')
 
-  const allAverages = courses
-    .map(computeCourseAvg)
+  const allAvgs = courses
+    .map((c) => getCourseSummary(c).average20)
     .filter((v): v is number => v !== null)
-  const enAverages = englishCourses
-    .map(computeCourseAvg)
+  const enAvgs = englishCourses
+    .map((c) => getCourseSummary(c).average20)
     .filter((v): v is number => v !== null)
-  const frAverages = frenchCourses
-    .map(computeCourseAvg)
+  const frAvgs = frenchCourses
+    .map((c) => getCourseSummary(c).average20)
     .filter((v): v is number => v !== null)
 
-  const overallAvg =
-    allAverages.length > 0
-      ? (allAverages.reduce((a, b) => a + b, 0) / allAverages.length).toFixed(2)
-      : '—'
-  const englishAvg =
-    enAverages.length > 0
-      ? (enAverages.reduce((a, b) => a + b, 0) / enAverages.length).toFixed(2)
-      : '—'
-  const frenchAvg =
-    frAverages.length > 0
-      ? (frAverages.reduce((a, b) => a + b, 0) / frAverages.length).toFixed(2)
-      : '—'
+  const overallFmt = formatAvgWithPct(allAvgs)
+  const englishFmt = formatAvgWithPct(enAvgs)
+  const frenchFmt = formatAvgWithPct(frAvgs)
 
   const totalUnexcused = absences.filter((a) => a.status === 'absent').length
 
-  // Build chronological evaluation checkpoints for English and French
   function buildTrackPoints(trackCourses: StudentCourseHistory[]): ChartPoint[] {
     const pts: ChartPoint[] = []
     for (const c of trackCourses) {
-      const semShort = c.semester_code || `S${c.term_number}`
-      if (c.midterm !== null && c.midterm !== undefined) {
-        pts.push({ label: `${semShort} • M1`, score: Number(c.midterm) })
-      }
-      if (c.post_midterm !== null && c.post_midterm !== undefined) {
-        pts.push({ label: `${semShort} • M2`, score: Number(c.post_midterm) })
-      }
-      if (c.final_exam !== null && c.final_exam !== undefined) {
-        pts.push({ label: `${semShort} • Final`, score: Number(c.final_exam) })
+      const semShort = c.semester_code || c.academic_year || ('S' + c.term_number)
+      if (chartMode === 'averages') {
+        const sum = getCourseSummary(c)
+        if (sum.average20 !== null) {
+          pts.push({ label: semShort + ' Y' + c.year_level, score: sum.average20 })
+        }
+      } else {
+        if (c.cc1 !== null && c.cc1 !== undefined) {
+          pts.push({ label: semShort + ' | CC1', score: Number(c.cc1) })
+        }
+        if (c.cc2 !== null && c.cc2 !== undefined) {
+          pts.push({ label: semShort + ' | CC2', score: Number(c.cc2) })
+        }
+        if (c.ex !== null && c.ex !== undefined) {
+          pts.push({ label: semShort + ' | EX', score: Number(c.ex) })
+        }
       }
     }
     return pts
@@ -233,13 +249,12 @@ export default function StudentProgressionClient({
   const frPoints = buildTrackPoints(frenchCourses)
   const maxPointsCount = Math.max(enPoints.length, frPoints.length)
 
-  // SVG Chart dimensions
-  const chartW = 720
-  const chartH = 230
-  const padL = 42
+  const chartW = 740
+  const chartH = 240
+  const padL = 44
   const padR = 24
-  const padT = 20
-  const padB = 38
+  const padT = 22
+  const padB = 40
   const plotW = chartW - padL - padR
   const plotH = chartH - padT - padB
 
@@ -293,21 +308,26 @@ export default function StudentProgressionClient({
                 <span className="rounded-md bg-slate-100 px-2.5 py-0.5 font-mono text-xs font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                   {student.student_code}
                 </span>
+                {student.cne && (
+                  <span className="rounded-md bg-amber-50 px-2.5 py-0.5 font-mono text-xs font-semibold text-amber-800 dark:bg-amber-950/60 dark:text-amber-300">
+                    CNE: {student.cne}
+                  </span>
+                )}
                 <span
-                  className={`rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                  className={
                     student.is_active
-                      ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                      : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-                  }`}
+                      ? 'rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                      : 'rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+                  }
                 >
                   {student.is_active ? t.activeBadge : t.inactiveBadge}
                 </span>
               </div>
 
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                {deptName || student.department_code || 'UPF'} •{' '}
+                {deptName || student.department_code || 'UPF'} |{' '}
                 {t.yearLabel(student.cohort_level)}
-                {student.email ? ` • ${student.email}` : ''}
+                {student.email ? ' | ' + student.email : ''}
               </p>
             </div>
           </div>
@@ -322,9 +342,14 @@ export default function StudentProgressionClient({
             <Award className="h-4 w-4 text-blue-600" />
           </div>
           <p className="mt-2 text-2xl font-bold text-slate-900 dark:text-white">
-            {overallAvg}{' '}
+            {overallFmt.avgText}{' '}
             <span className="text-sm font-normal text-slate-400">/ 20</span>
           </p>
+          {overallFmt.pctText && (
+            <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {overallFmt.pctText}
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -333,9 +358,14 @@ export default function StudentProgressionClient({
             <GraduationCap className="h-4 w-4 text-blue-500" />
           </div>
           <p className="mt-2 text-2xl font-bold text-blue-600 dark:text-blue-400">
-            {englishAvg}{' '}
+            {englishFmt.avgText}{' '}
             <span className="text-sm font-normal text-slate-400">/ 20</span>
           </p>
+          {englishFmt.pctText && (
+            <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {englishFmt.pctText}
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -344,9 +374,14 @@ export default function StudentProgressionClient({
             <BookOpen className="h-4 w-4 text-amber-500" />
           </div>
           <p className="mt-2 text-2xl font-bold text-amber-600 dark:text-amber-400">
-            {frenchAvg}{' '}
+            {frenchFmt.avgText}{' '}
             <span className="text-sm font-normal text-slate-400">/ 20</span>
           </p>
+          {frenchFmt.pctText && (
+            <p className="mt-0.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {frenchFmt.pctText}
+            </p>
+          )}
         </div>
 
         <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs dark:border-slate-800 dark:bg-slate-900">
@@ -362,7 +397,7 @@ export default function StudentProgressionClient({
 
       {/* Progression Chart */}
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-xs dark:border-slate-800 dark:bg-slate-900">
-        <div className="flex flex-col justify-between gap-2 sm:flex-row sm:items-center">
+        <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-center">
           <div>
             <h2 className="flex items-center gap-2 text-base font-bold text-slate-900 dark:text-white">
               <TrendingUp className="h-4 w-4 text-blue-600" />
@@ -373,15 +408,42 @@ export default function StudentProgressionClient({
             </p>
           </div>
 
-          <div className="flex items-center gap-4 text-xs font-semibold">
-            <span className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400">
-              <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
-              {t.englishLegend}
-            </span>
-            <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-              <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
-              {t.frenchLegend}
-            </span>
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-semibold dark:border-slate-800 dark:bg-slate-950">
+              <button
+                type="button"
+                onClick={() => setChartMode('checkpoints')}
+                className={
+                  chartMode === 'checkpoints'
+                    ? 'cursor-pointer rounded-md bg-white px-2.5 py-1 text-slate-900 shadow-2xs dark:bg-slate-800 dark:text-white'
+                    : 'cursor-pointer px-2.5 py-1 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }
+              >
+                {t.modeCheckpoints}
+              </button>
+              <button
+                type="button"
+                onClick={() => setChartMode('averages')}
+                className={
+                  chartMode === 'averages'
+                    ? 'cursor-pointer rounded-md bg-white px-2.5 py-1 text-slate-900 shadow-2xs dark:bg-slate-800 dark:text-white'
+                    : 'cursor-pointer px-2.5 py-1 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                }
+              >
+                {t.modeAverages}
+              </button>
+            </div>
+
+            <div className="flex items-center gap-4 text-xs font-semibold">
+              <span className="inline-flex items-center gap-1.5 text-blue-600 dark:text-blue-400">
+                <span className="h-2.5 w-2.5 rounded-full bg-blue-600" />
+                {t.englishLegend}
+              </span>
+              <span className="inline-flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
+                <span className="h-2.5 w-2.5 rounded-full bg-amber-500" />
+                {t.frenchLegend}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -392,12 +454,11 @@ export default function StudentProgressionClient({
         ) : (
           <div className="mt-5 overflow-x-auto">
             <svg
-              viewBox={`0 0 ${chartW} ${chartH}`}
+              viewBox={'0 0 ' + chartW + ' ' + chartH}
               className="h-60 w-full min-w-[540px]"
               role="img"
               aria-label={t.chartTitle}
             >
-              {/* Horizontal grid lines (0, 5, 10, 15, 20) */}
               {[0, 5, 10, 15, 20].map((tick) => {
                 const y = padT + plotH - (tick / 20) * plotH
                 const isPassingLine = tick === 10
@@ -425,7 +486,6 @@ export default function StudentProgressionClient({
                 )
               })}
 
-              {/* English trend line */}
               {enCoords.length > 1 && (
                 <polyline
                   fill="none"
@@ -433,11 +493,10 @@ export default function StudentProgressionClient({
                   strokeWidth={2.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  points={enCoords.map((p) => `${p.x},${p.y}`).join(' ')}
+                  points={enCoords.map((p) => p.x + ',' + p.y).join(' ')}
                 />
               )}
 
-              {/* French trend line */}
               {frCoords.length > 1 && (
                 <polyline
                   fill="none"
@@ -445,13 +504,12 @@ export default function StudentProgressionClient({
                   strokeWidth={2.5}
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  points={frCoords.map((p) => `${p.x},${p.y}`).join(' ')}
+                  points={frCoords.map((p) => p.x + ',' + p.y).join(' ')}
                 />
               )}
 
-              {/* English data points */}
               {enCoords.map((pt, i) => (
-                <g key={`en-${i}`}>
+                <g key={'en-' + i}>
                   <circle
                     cx={pt.x}
                     cy={pt.y}
@@ -471,9 +529,8 @@ export default function StudentProgressionClient({
                 </g>
               ))}
 
-              {/* French data points */}
               {frCoords.map((pt, i) => (
-                <g key={`fr-${i}`}>
+                <g key={'fr-' + i}>
                   <circle
                     cx={pt.x}
                     cy={pt.y}
@@ -493,7 +550,6 @@ export default function StudentProgressionClient({
                 </g>
               ))}
 
-              {/* X-axis checkpoint labels */}
               {xLabels.map((lbl, idx) => {
                 const x =
                   maxPointsCount <= 1
@@ -501,7 +557,7 @@ export default function StudentProgressionClient({
                     : padL + (idx / (maxPointsCount - 1)) * plotW
                 return (
                   <text
-                    key={`lbl-${idx}`}
+                    key={'lbl-' + idx}
                     x={x}
                     y={chartH - 10}
                     textAnchor="middle"
@@ -529,7 +585,7 @@ export default function StudentProgressionClient({
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {courses.map((c) => {
-              const avg = computeCourseAvg(c)
+              const summary = getCourseSummary(c)
               const formatLabel =
                 c.course_format === 'full_module'
                   ? t.fullModuleBadge
@@ -546,11 +602,11 @@ export default function StudentProgressionClient({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-1.5">
                         <span
-                          className={`rounded-md px-2 py-0.5 text-xs font-semibold ${
+                          className={
                             c.subject === 'english'
-                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/70 dark:text-blue-300'
-                              : 'bg-amber-50 text-amber-700 dark:bg-amber-950/70 dark:text-amber-300'
-                          }`}
+                              ? 'rounded-md bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-950/70 dark:text-blue-300'
+                              : 'rounded-md bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/70 dark:text-amber-300'
+                          }
                         >
                           {locale === 'fr'
                             ? c.semester_label_fr
@@ -563,7 +619,7 @@ export default function StudentProgressionClient({
                       </div>
 
                       <Link
-                        href={`/semi-modules/${c.semi_module_id}`}
+                        href={'/semi-modules/' + c.semi_module_id}
                         className="text-xs font-semibold text-blue-600 hover:underline dark:text-blue-400"
                       >
                         {t.openClass}
@@ -590,46 +646,49 @@ export default function StudentProgressionClient({
                     </div>
                   </div>
 
-                  {/* 3-Evaluation Score Strip */}
+                  {/* CC1 / CC2 / EX Score Strip */}
                   <div className="mt-4 grid grid-cols-4 gap-2 border-t border-slate-100 pt-4 text-center dark:border-slate-800">
                     <div className="rounded-lg bg-slate-50 p-2 dark:bg-slate-950/60">
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {t.midterm}
+                        {t.cc1Label}
                       </p>
                       <p className="mt-0.5 text-sm font-bold text-slate-900 dark:text-white">
-                        {c.midterm !== null ? Number(c.midterm).toFixed(2) : '—'}
+                        {c.cc1 !== null ? Number(c.cc1).toFixed(2) : '--'}
                       </p>
                     </div>
 
                     <div className="rounded-lg bg-slate-50 p-2 dark:bg-slate-950/60">
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {t.postMidterm}
+                        {t.cc2Label}
                       </p>
                       <p className="mt-0.5 text-sm font-bold text-slate-900 dark:text-white">
-                        {c.post_midterm !== null
-                          ? Number(c.post_midterm).toFixed(2)
-                          : '—'}
+                        {c.cc2 !== null ? Number(c.cc2).toFixed(2) : '--'}
                       </p>
                     </div>
 
                     <div className="rounded-lg bg-slate-50 p-2 dark:bg-slate-950/60">
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        {t.finalExam}
+                        {t.exLabel}
                       </p>
                       <p className="mt-0.5 text-sm font-bold text-slate-900 dark:text-white">
-                        {c.final_exam !== null
-                          ? Number(c.final_exam).toFixed(2)
-                          : '—'}
+                        {c.ex !== null ? Number(c.ex).toFixed(2) : '--'}
                       </p>
                     </div>
 
                     <div className="rounded-lg bg-blue-50/80 p-2 dark:bg-blue-950/40">
                       <p className="text-[11px] font-medium text-blue-700 dark:text-blue-300">
-                        {t.average}
+                        {t.averageLabel}
                       </p>
                       <p className="mt-0.5 text-sm font-bold text-blue-700 dark:text-blue-300">
-                        {avg !== null ? avg.toFixed(2) : '—'}
+                        {summary.average20 !== null
+                          ? summary.average20.toFixed(2)
+                          : '--'}
                       </p>
+                      {summary.percentage !== null && (
+                        <p className="text-[10px] font-semibold text-blue-600/80 dark:text-blue-300/80">
+                          {summary.percentage.toFixed(1)}%
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -672,13 +731,13 @@ export default function StudentProgressionClient({
                   </td>
                   <td className="px-5 py-3">
                     <span
-                      className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                      className={
                         a.status === 'absent'
-                          ? 'bg-red-50 text-red-700 dark:bg-red-950/60 dark:text-red-300'
+                          ? 'inline-flex rounded-full bg-red-50 px-2.5 py-0.5 text-xs font-semibold text-red-700 dark:bg-red-950/60 dark:text-red-300'
                           : a.status === 'late'
-                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-                            : 'bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
-                      }`}
+                            ? 'inline-flex rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
+                            : 'inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 dark:bg-blue-950/60 dark:text-blue-300'
+                      }
                     >
                       {a.status === 'absent'
                         ? t.statusAbsent
@@ -688,7 +747,7 @@ export default function StudentProgressionClient({
                     </span>
                   </td>
                   <td className="px-5 py-3 text-slate-500 dark:text-slate-400">
-                    {a.reason || '—'}
+                    {a.reason || '--'}
                   </td>
                 </tr>
               ))}

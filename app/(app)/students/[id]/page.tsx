@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic'
+
 import { notFound } from 'next/navigation'
 import { getLocale } from 'next-intl/server'
 import { createClient } from '@/lib/supabase/server'
@@ -27,6 +29,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
     .select(`
       id,
       student_code,
+      cne,
       first_name,
       last_name,
       email,
@@ -52,6 +55,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
   const studentMeta: StudentProfileMeta = {
     id: studentData.id,
     student_code: studentData.student_code,
+    cne: studentData.cne ?? null,
     first_name: studentData.first_name,
     last_name: studentData.last_name,
     email: studentData.email,
@@ -63,7 +67,6 @@ export default async function StudentDetailPage({ params }: PageProps) {
     department_color: homeDept?.color_accent ?? '#1d4ed8',
   }
 
-  // Fetch all enrollments across all semesters
   const { data: enrollmentsData } = await supabase
     .from('student_enrollments')
     .select(`
@@ -79,6 +82,9 @@ export default async function StudentDetailPage({ params }: PageProps) {
         room_number,
         schedule_note,
         max_absences_allowed,
+        weight_cc1,
+        weight_cc2,
+        weight_ex,
         professor:profiles (
           full_name,
           email
@@ -103,13 +109,11 @@ export default async function StudentDetailPage({ params }: PageProps) {
     `)
     .eq('student_id', id)
 
-  // Fetch all grades across all semesters
   const { data: gradesData } = await supabase
     .from('student_grades')
-    .select('semi_module_id, midterm, post_midterm, final_exam, notes, updated_at')
+    .select('semi_module_id, cc1, cc2, ex, midterm, post_midterm, final_exam, notes, updated_at')
     .eq('student_id', id)
 
-  // Fetch all absences across all semesters
   const { data: absencesData } = await supabase
     .from('student_absences')
     .select('id, semi_module_id, session_date, status, reason')
@@ -136,6 +140,10 @@ export default async function StudentDetailPage({ params }: PageProps) {
       (a) => a.semi_module_id === sm.id && a.status === 'absent'
     ).length
 
+    const cc1Val = grade?.cc1 ?? grade?.midterm ?? null
+    const cc2Val = grade?.cc2 ?? grade?.post_midterm ?? null
+    const exVal = grade?.ex ?? grade?.final_exam ?? null
+
     courseHistory.push({
       semi_module_id: sm.id,
       subject: sm.subject,
@@ -156,19 +164,22 @@ export default async function StudentDetailPage({ params }: PageProps) {
       semester_label_fr: sem?.label_fr ?? 'Semestre inconnu',
       academic_year: sem?.academic_year ?? '',
       term_number: sem?.term_number ?? 1,
-      midterm: grade?.midterm ?? null,
-      post_midterm: grade?.post_midterm ?? null,
-      final_exam: grade?.final_exam ?? null,
+      cc1: cc1Val,
+      cc2: cc2Val,
+      ex: exVal,
+      weight_cc1: Number(sm.weight_cc1 ?? 25),
+      weight_cc2: Number(sm.weight_cc2 ?? 25),
+      weight_ex: Number(sm.weight_ex ?? 50),
       notes: grade?.notes ?? null,
       unexcused_absences: classAbsences,
     })
   }
 
-  // Sort chronologically (oldest to newest) for the progression chart
   courseHistory.sort((a, b) => {
     const yearCmp = a.academic_year.localeCompare(b.academic_year)
     if (yearCmp !== 0) return yearCmp
-    return a.term_number - b.term_number
+    if (a.term_number !== b.term_number) return a.term_number - b.term_number
+    return a.year_level - b.year_level
   })
 
   const absenceHistory: StudentAbsenceHistory[] = (absencesData ?? []).map(
